@@ -14,7 +14,7 @@ been run. Nothing has been deployed.
 ## What is done (Stage 3A)
 
 ### 3A.1 Environment verification - Verified
-- AWS CLI 2.36.47, account `874726179107`, IAM user `autorefund-dev`, region
+- AWS CLI 2.36.47, account `<AWS_ACCOUNT_ID>`, IAM user `autorefund-dev`, region
   `ca-central-1`.
 - **The AWS CLI profile is named `default`**, not `autorefund-dev` (that's
   the IAM user's name). Terraform's `aws_profile` variable defaults to
@@ -122,17 +122,21 @@ alb_https,github_oidc,monitoring}` + `infra/terraform/environments/{dev,staging}
 - `terraform fmt -check -recursive`: **clean** (after one `fmt -recursive` pass).
 - `terraform init` + `terraform validate`: **succeeded** for both `dev` and
   `staging`.
-- `terraform plan`: **dev: 54 to add, 0 to change, 0 to destroy. staging:
-  54 to add, 0 to change, 0 to destroy.** (Local placeholder `terraform.tfvars`
-  with a fake `alarm_email` was used to make `plan` runnable; it is
-  git-ignored and must be replaced with a real email before any `apply`.)
+- `terraform plan` (re-run after the pre-3B review round, with your real
+  `alarm_email`/`allowed_ingress_cidrs` in local `terraform.tfvars`):
+  **dev: 58 to add, 0 to change, 0 to destroy**, no replacements. **staging:
+  "No changes. Your infrastructure matches the configuration."** - i.e.
+  **0 resources**, because `apply_allowed` defaults to `false` (see the new
+  staging apply-guard below). dev's count went from 54 to 58 because of the
+  two new Terraform-owned placeholder secrets (4 resources: 2 secrets + 2
+  secret versions).
 - Networking: 1 VPC, 2 public subnets (ALB + ECS, `assign_public_ip=true`),
   2 private DB subnets, **no NAT Gateway, no VPC interface endpoints**
   (explicit cost decision). ALB SG ingress limited to
   `var.allowed_ingress_cidrs` (empty by default - nobody can reach it until
   set). ECS task SG accepts the app port from the ALB SG only. RDS SG
   accepts 5432 from the ECS task SG only.
-- Database: RDS Postgres 16.10, `db.t4g.micro`, single-AZ, 20 GB gp3,
+- Database: RDS Postgres 16.15 (matches local Windows dev exactly), `db.t4g.micro`, single-AZ, 20 GB gp3,
   encrypted, `manage_master_user_password = true` (no DB password anywhere
   in Terraform code or state), `publicly_accessible = false`, 1-day backups,
   `skip_final_snapshot=true`/`deletion_protection=false` in dev (opposite in
@@ -158,8 +162,16 @@ alb_https,github_oidc,monitoring}` + `infra/terraform/environments/{dev,staging}
   listener depends on it). HTTP listener redirects to HTTPS. Target group
   health check is `/api/health`.
 - Secrets Manager: RDS-managed master password secret (created by RDS
-  itself); generated admin password and kiosk keys are written by the
-  one-off tasks in Stage 3B, not by Terraform.
+  itself). Terraform also **pre-creates two empty placeholder secrets**
+  with predictable names - `autorefund/dev/admin-password` and
+  `autorefund/dev/kiosk/KIOSK-001` (`recovery_window_in_days = 0`) - that
+  the one-off tasks (seed.py, `manage_tenancy.py issue-staging-key`) only
+  fill via `put_secret_value`. Because Terraform owns the secret container,
+  `terraform destroy` removes them too - no orphaned secret. `seed.py` and
+  `issue-staging-key` default to these exact names now (still overridable),
+  so no operator needs to type them out. A second kiosk beyond `KIOSK-001`
+  still needs its own manually-created secret (not solved generically -
+  Phase 3 dev/staging scope is single-kiosk).
 - CloudWatch: 7-day log retention; alarms for ALB 5xx, ALB `HealthyHostCount
   < 1` (used instead of an ECS `RunningTaskCount` metric, which needs paid
   Container Insights - this is free and equally direct), and RDS free
@@ -171,12 +183,15 @@ alb_https,github_oidc,monitoring}` + `infra/terraform/environments/{dev,staging}
   support resource-level restriction on these), update/describe the dev
   service, `RunTask`/`DescribeTasks`/`ListTasks` scoped to the dev cluster,
   `PassRole` limited to exactly the three task roles above.
-- **staging is plan-only by design**: its `github_oidc` module would create
-  a second account-wide OIDC provider if ever applied, conflicting with
-  dev's. Documented with a `NOTE` comment in
-  `infra/terraform/environments/staging/main.tf` - staging must not be
-  applied without first fixing that (share dev's provider via remote state,
-  or a conditional guard).
+- **staging has a real technical apply-guard**, not just a procedural rule:
+  every module in `environments/staging/main.tf` has
+  `count = var.apply_allowed ? 1 : 0` (`apply_allowed` defaults to `false`).
+  With the default, `terraform plan` for staging shows **0 resources to
+  add**. Its `github_oidc` module would still create a second account-wide
+  OIDC provider and conflict with dev's if `apply_allowed` were ever
+  deliberately set `true` without also fixing that (documented in the
+  variable's description and in `main.tf`) - the gate stops *accidental*
+  application, it does not by itself make staging safe to apply.
 
 ### 3A.6 Cost estimate - see below (not yet re-verified against actual AWS billing; Free-plan credits: $120 total, $0 spent so far per the budget check)
 
@@ -213,8 +228,11 @@ they run out, the account is closed.** The existing budget alerts
   (planned for 3B.8), no Namecheap DNS records added.
 - **Stage 3C**: kiosk agent cloud config, employee screen `VITE_API_ORIGIN`
   docs, offline-safety re-test against the cloud API, hardware checklist,
-  `docs/aws-deployment.md`, `docs/architecture.md` cloud section - all
-  pending, deliberately deferred to after 3B per the phase instructions.
+  the rest of `docs/aws-deployment.md` (architecture, full deploy flow,
+  security model - only the "destroy dev" and "staging apply-guard"
+  sections exist so far, added ahead of schedule per your review), and the
+  `docs/architecture.md` cloud section - all pending, deliberately deferred
+  to after 3B per the phase instructions.
 - An S3 remote Terraform backend (proposed, not created - local
   `terraform.tfstate` is git-ignored and used for now).
 - Real GitHub repo settings (deploy role ARN as a repo variable, a `dev`
@@ -230,15 +248,33 @@ they run out, the account is closed.** The existing budget alerts
   end-to-end, `manage_tenancy.py issue-staging-key` against a real Secrets
   Manager secret.
 
-## Open questions for the next session / before 3B
+## Pre-3B review round (resolved before any apply)
 
-1. Real `alarm_email` for CloudWatch alarm notifications (a placeholder is
-   in the local, git-ignored `terraform.tfvars` right now).
-2. Current public IP(s) for `allowed_ingress_cidrs` (empty by default - the
-   ALB will accept nobody's traffic until this is set).
-3. Confirm the exact Stage 3B apply sequence in this doc's §3B before
-   running the first `terraform apply` (certificate step), per the
-   Namecheap two-step ACM flow described above.
+The user reviewed the plan/code read-only and asked for the following
+before approving 3B; all done, tests re-passed (158), `fmt`/`validate`/
+`plan` re-run (see below):
+
+1. Account ID redacted from this doc (`<AWS_ACCOUNT_ID>`); confirmed with
+   `git grep` that no tracked file contains the literal account ID anywhere.
+2. RDS bumped from `16.10` to `16.15` to match local Windows dev exactly.
+3. Staging apply-guard added (`var.apply_allowed`, real `count`-based gate,
+   not just documentation) - see §3A.5 above.
+4. `docs/aws-deployment.md` created early with a "Destroy dev / stop costs"
+   section (exact commands, including the manual-secret and Namecheap
+   caveats) and the staging apply-guard explanation.
+5. Predictable, Terraform-owned placeholder secrets for the one-off tasks
+   (`autorefund/dev/admin-password`, `autorefund/dev/kiosk/KIOSK-001`) - see
+   the Secrets Manager bullet in §3A.5 above.
+6. ECS task egress/ingress reconfirmed by re-reading
+   `infra/terraform/modules/network/main.tf`: task SG egress is `-1`/all
+   (needed since dev has no NAT/VPC endpoints - ECR, Secrets Manager and
+   CloudWatch Logs are reached over the internet via the task's public IP;
+   RDS is reached over the VPC's local route). Task SG ingress has exactly
+   one rule: the app port from the ALB SG - no other inbound path exists.
+
+`terraform.tfvars` (local, git-ignored, never committed) now has your real
+`alarm_email` and `allowed_ingress_cidrs` set to your current public IP -
+update the IP again if it changes before demoing (e.g. at college).
 
 ---
 
@@ -255,5 +291,8 @@ they run out, the account is closed.** The existing budget alerts
 
 **Infrastructure**: `infra/terraform/` (new - modules + dev/staging
 environments, see §3A.5).
+
+**Documentation**: `docs/aws-deployment.md` (new, partial - destroy/stop-costs
+and staging apply-guard sections only; the rest lands in Stage 3C).
 
 **Root**: `.gitignore` (Terraform section added).
