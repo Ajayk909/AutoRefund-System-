@@ -16,7 +16,7 @@ variable "vpc_security_group_ids" {
 
 variable "engine_version" {
   type    = string
-  default = "16.10"
+  default = "16.15" # matches the local Windows dev PostgreSQL minor version
 }
 
 variable "instance_class" {

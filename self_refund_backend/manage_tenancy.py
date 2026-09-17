@@ -6,7 +6,7 @@ Manage retailers, stores and kiosks from the command line.
     python manage_tenancy.py add-store <RETAILER_CODE> <STORE_CODE> "<Name>"
     python manage_tenancy.py add-kiosk <RETAILER_CODE> <STORE_CODE> <KIOSK_CODE>
     python manage_tenancy.py issue-dev-key <KIOSK_CODE> [--write-env <path to kiosk_agent\.env>]
-    python manage_tenancy.py issue-staging-key <KIOSK_CODE> --secret-name <Secrets Manager secret> [--days N]
+    python manage_tenancy.py issue-staging-key <KIOSK_CODE> [--secret-name <name>] [--days N]
     python manage_tenancy.py revoke-keys <KIOSK_CODE>
 
 issue-dev-key creates a DEVELOPMENT key for the kiosk agent (shown once, or
@@ -14,10 +14,14 @@ written to the agent's .env as KIOSK_DEV_KEY). Development keys only work
 while the Core API listens on 127.0.0.1 and expire after DEV_KEY_MAX_DAYS.
 
 issue-staging-key creates a cloud dev/staging key (DEVICE_AUTH_MODE=staging-key)
-and writes it straight into the given Secrets Manager secret; the value is
-never printed. It expires after STAGING_KEY_MAX_DAYS (default 14) unless
---days gives a shorter lifetime. Production kiosk enrollment replaces both
-key types in a later phase.
+and writes it straight into Secrets Manager; the value is never printed. By
+default the secret name is autorefund/<ENVIRONMENT>/kiosk/<KIOSK_CODE> - the
+same predictable name Terraform pre-creates (as an empty placeholder, so
+`terraform destroy` cleans it up) for the single dev kiosk. Pass
+--secret-name to target a different secret (e.g. a second kiosk, which needs
+its own manually-created secret). Expires after STAGING_KEY_MAX_DAYS
+(default 14) unless --days gives a shorter lifetime. Production kiosk
+enrollment replaces both key types in a later phase.
 """
 import sys
 
@@ -78,10 +82,11 @@ def main(argv):
             if not kiosk:
                 print(f"Kiosk {args[0]} not found")
                 return 1
-            if "--secret-name" not in args or args.index("--secret-name") + 1 >= len(args):
-                print("issue-staging-key requires --secret-name <Secrets Manager secret name>")
-                return 1
-            secret_name = args[args.index("--secret-name") + 1]
+            if "--secret-name" in args and args.index("--secret-name") + 1 < len(args):
+                secret_name = args[args.index("--secret-name") + 1]
+            else:
+                environment = app.config.get("ENVIRONMENT", "dev")
+                secret_name = f"autorefund/{environment}/kiosk/{kiosk.code}"
             days = None
             if "--days" in args and args.index("--days") + 1 < len(args):
                 days = int(args[args.index("--days") + 1])

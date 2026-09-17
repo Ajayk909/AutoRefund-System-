@@ -136,6 +136,54 @@ resource "aws_iam_role_policy" "oneoff_secrets" {
   policy = data.aws_iam_policy_document.oneoff_secrets.json
 }
 
+# --- Secrets Manager: Terraform-owned placeholders for the one-off tasks ---------------
+# Predictable names, and Terraform owns the secret container itself (not
+# just its eventual value), so `terraform destroy` actually removes it
+# instead of leaving an orphaned secret only the one-off tasks knew the name
+# of. The one-off tasks (seed.py, manage_tenancy.py issue-staging-key)
+# overwrite the placeholder value with put_secret_value - Terraform must
+# never fight that, hence ignore_changes on secret_string.
+
+resource "aws_secretsmanager_secret" "admin_password" {
+  name                    = "${var.oneoff_secret_name_prefix}admin-password"
+  recovery_window_in_days = var.secret_recovery_window_days
+
+  tags = {
+    Project     = var.project
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "admin_password" {
+  secret_id     = aws_secretsmanager_secret.admin_password.id
+  secret_string = "not-yet-set"
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+resource "aws_secretsmanager_secret" "dev_kiosk_key" {
+  name                    = "${var.oneoff_secret_name_prefix}kiosk/${var.dev_kiosk_code}"
+  recovery_window_in_days = var.secret_recovery_window_days
+
+  tags = {
+    Project     = var.project
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "dev_kiosk_key" {
+  secret_id     = aws_secretsmanager_secret.dev_kiosk_key.id
+  secret_string = "not-yet-set"
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
 # --- Task definition + service ----------------------------------------------------------
 
 resource "aws_ecs_task_definition" "core_api" {

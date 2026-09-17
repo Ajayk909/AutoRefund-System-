@@ -34,6 +34,14 @@ output "ecs_oneoff_task_role_arn" {
   value = module.ecs_service.oneoff_task_role_arn
 }
 
+output "admin_password_secret_name" {
+  value = module.ecs_service.admin_password_secret_name
+}
+
+output "dev_kiosk_key_secret_name" {
+  value = module.ecs_service.dev_kiosk_key_secret_name
+}
+
 output "alb_dns_name" {
   value = module.alb_https.alb_dns_name
 }

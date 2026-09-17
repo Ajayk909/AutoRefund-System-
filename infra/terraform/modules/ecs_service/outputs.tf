@@ -33,3 +33,11 @@ output "oneoff_task_role_arn" {
 output "log_group_name" {
   value = aws_cloudwatch_log_group.core_api.name
 }
+
+output "admin_password_secret_name" {
+  value = aws_secretsmanager_secret.admin_password.name
+}
+
+output "dev_kiosk_key_secret_name" {
+  value = aws_secretsmanager_secret.dev_kiosk_key.name
+}

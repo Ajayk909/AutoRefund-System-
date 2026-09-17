@@ -9,8 +9,9 @@ give the kiosk agent its development key:
     python manage_tenancy.py issue-dev-key KIOSK-001 --write-env ..\kiosk_agent\.env
 
 Outside local (ENVIRONMENT != local), the admin password is NOT admin123: a
-random password is generated and stored in the Secrets Manager secret named
-by SEED_ADMIN_SECRET_NAME (required in that case). It is never printed.
+random password is generated and stored in the Secrets Manager secret
+Terraform pre-created for this (autorefund/<environment>/admin-password,
+override with SEED_ADMIN_SECRET_NAME). It is never printed.
 """
 import os
 import secrets
@@ -73,11 +74,10 @@ with app.app_context():
     if environment == "local":
         admin_password = "admin123"
     else:
-        secret_name = os.getenv("SEED_ADMIN_SECRET_NAME")
-        if not secret_name:
-            print("SEED_ADMIN_SECRET_NAME must be set outside local so the generated "
-                 "admin password can be stored in Secrets Manager.")
-            sys.exit(1)
+        # Matches the name Terraform pre-creates (ecs_service module's
+        # admin_password secret): autorefund/<environment>/admin-password.
+        # Override with SEED_ADMIN_SECRET_NAME only if that convention changes.
+        secret_name = os.getenv("SEED_ADMIN_SECRET_NAME") or f"autorefund/{environment}/admin-password"
         admin_password = secrets.token_urlsafe(18)
     setup.create_staff(retailer, "admin1", admin_password, "Demo Admin", role="admin",
                        email="admin@test.com")

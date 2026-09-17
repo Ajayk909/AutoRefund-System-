@@ -104,3 +104,15 @@ variable "oneoff_secret_name_prefix" {
   type        = string
   description = "Secrets Manager name prefix the one-off task role may create/write (e.g. autorefund/dev/)."
 }
+
+variable "dev_kiosk_code" {
+  type        = string
+  default     = "KIOSK-001"
+  description = "Phase 3 dev/staging is single-kiosk. Terraform pre-creates an empty secret for exactly this kiosk's staging-key so `terraform destroy` cleans it up. A second kiosk needs its own manually-created secret (documented in docs/aws-deployment.md), not solved generically here."
+}
+
+variable "secret_recovery_window_days" {
+  type        = number
+  default     = 0
+  description = "0 = delete immediately on terraform destroy (dev). AWS otherwise requires 7-30 days."
+}

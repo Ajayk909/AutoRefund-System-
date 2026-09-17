@@ -66,10 +66,20 @@ def test_issue_staging_key_command_never_prints_the_secret(app, capsys, monkeypa
     assert r.status_code == 200
 
 
-def test_issue_staging_key_requires_secret_name(app, capsys, monkeypatch):
+def test_issue_staging_key_defaults_to_the_predictable_terraform_name(app, monkeypatch):
+    """Matches ecs_service module's dev_kiosk_key secret:
+    autorefund/<environment>/kiosk/<code> - so no --secret-name is needed for
+    the single dev kiosk Terraform already pre-created a placeholder for."""
     import manage_tenancy
+
+    app.config["ENVIRONMENT"] = "dev"
     monkeypatch.setattr(manage_tenancy, "create_app", lambda: app)
-    assert manage_tenancy.main(["issue-staging-key", "KIOSK-001"]) == 1
+    captured = {}
+    monkeypatch.setattr(manage_tenancy, "store_secret",
+                        lambda name, value, client=None: captured.update(name=name, value=value))
+
+    assert manage_tenancy.main(["issue-staging-key", "KIOSK-001"]) == 0
+    assert captured["name"] == "autorefund/dev/kiosk/KIOSK-001"
 
 
 def test_issue_staging_key_unknown_kiosk(app, monkeypatch):
