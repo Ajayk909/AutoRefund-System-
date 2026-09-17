@@ -5,9 +5,31 @@ throughout: **Verified** (actually run/observed), **Implemented but not
 deployed** (code/config exists, correct on review, not exercised against
 real AWS), **Unable to verify** (not checked at all).
 
-Current stage: **3A complete, stopped for approval before 3B (deploy).**
-No AWS-changing command (`terraform apply`, `docker push`, `git push`) has
-been run. Nothing has been deployed.
+Current stage: **3B in progress. Step 1 of the ALB/ACM sequence done,
+stopped waiting for the Namecheap DNS record to be added.**
+
+**Real AWS resources now exist** (this is no longer plan-only):
+- ACM certificate requested for `api-dev.autorefundkiosk.online`:
+  `arn:aws:acm:ca-central-1:<AWS_ACCOUNT_ID>:certificate/eb3082b8-152a-4dca-9d71-92d30a6e366d`,
+  status `PENDING_VALIDATION`. Created via
+  `terraform apply -target module.alb_https.aws_acm_certificate.this`
+  (only this one resource - `1 added, 0 changed, 0 destroyed`).
+- **Next step (blocked on you)**: add this CNAME at Namecheap, then this
+  session (or a new one) confirms the certificate reaches `ISSUED` via
+  `aws acm describe-certificate --certificate-arn
+  arn:aws:acm:ca-central-1:<AWS_ACCOUNT_ID>:certificate/eb3082b8-152a-4dca-9d71-92d30a6e366d
+  --query Certificate.Status`, then a normal full `terraform apply` creates
+  everything else (VPC, RDS, ECR, S3, ECS, ALB, GitHub OIDC, monitoring).
+
+  | Namecheap field | Value |
+  |---|---|
+  | Type | CNAME Record |
+  | Host | `_4deb48f69c791dbeb066e86813f93121.api-dev` |
+  | Value | `_f569680a31cadbbedeabd544e6f59cc4.wzccmgtwzk.acm-validations.aws` |
+  | TTL | Automatic |
+
+Nothing else has been created (no VPC/RDS/ECS/ALB/S3/ECR/etc.), no image
+pushed, no migration/seed run, no GitHub Actions workflow added yet.
 
 ---
 
