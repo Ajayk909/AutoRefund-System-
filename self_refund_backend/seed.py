@@ -12,14 +12,15 @@ import os
 import sys
 
 from app import create_app, db
-from app.models import (AuditLog, Kiosk, Product, ProductIdentifier, Refund, Retailer, Staff,
-                        StaffSession, Store, StoreGroup, Transaction, TransactionItem)
+from app.models import (AuditLog, Kiosk, KioskCredential, Product, ProductIdentifier, Refund,
+                        Retailer, Staff, StaffSession, Store, StoreGroup, Transaction,
+                        TransactionItem)
 from app.tenancy import setup
 
 if "--yes" not in sys.argv:
     answer = input(
-        "This will DELETE all returns, receipts, products, staff, kiosks, stores and "
-        "retailers in the configured database.\nType YES to continue: ")
+        "This will DELETE all returns, receipts, products, staff, kiosks, kiosk agent keys, "
+        "stores and retailers in the configured database.\nType YES to continue: ")
     if answer.strip() != "YES":
         print("Cancelled. Nothing was changed.")
         sys.exit(1)
@@ -29,7 +30,7 @@ app = create_app()
 with app.app_context():
     print("Clearing old demo/test data...")
     for model in (AuditLog, Refund, TransactionItem, Transaction, ProductIdentifier, Product,
-                  StaffSession, Staff, Kiosk, Store, StoreGroup, Retailer):
+                  StaffSession, Staff, KioskCredential, Kiosk, Store, StoreGroup, Retailer):
         model.query.delete()
     db.session.commit()
 
@@ -69,5 +70,6 @@ with app.app_context():
     print("\nSEED COMPLETE")
     print("Receipts: RCP-1001 (3 items), RCP-1002 (Yogurt Cup x3), RCP-0900 (outside return window)")
     print("admin1 / admin123  (demo only - change before any real use)")
-    print(f"\nNext: python manage_tenancy.py issue-dev-key {kiosk_code} "
+    print("\nOld kiosk agent keys were deleted. Give the agent a new one:")
+    print(f"python manage_tenancy.py issue-dev-key {kiosk_code} "
           "--write-env ..\\kiosk_agent\\.env")

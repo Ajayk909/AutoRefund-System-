@@ -171,3 +171,22 @@ def test_downgrade_refuses_when_data_needs_tenants(engine):
     assert result.returncode != 0
     assert "same receipt number exists at more than one retailer" in result.stderr
     assert "(head)" in alembic("current").stdout  # nothing was changed (still at head)
+
+
+def test_seed_resets_a_database_that_has_kiosk_keys(engine):
+    """seed.py must delete kiosk agent keys before kiosks (Phase 2 regression)."""
+    run_ok("upgrade", "head")
+    env = dict(os.environ, DATABASE_URL=URL, KIOSK_ID="KIOSK-001")
+    seed = [sys.executable, "seed.py", "--yes"]
+    first = subprocess.run(seed, cwd=BACKEND_DIR, env=env, capture_output=True, text=True)
+    assert first.returncode == 0, first.stdout + first.stderr
+    key = subprocess.run([sys.executable, "manage_tenancy.py", "issue-dev-key", "KIOSK-001"],
+                         cwd=BACKEND_DIR, env=env, capture_output=True, text=True)
+    assert key.returncode == 0, key.stdout + key.stderr
+    assert scalar(engine, "SELECT count(*) FROM kiosk_credentials") == 1
+
+    again = subprocess.run(seed, cwd=BACKEND_DIR, env=env, capture_output=True, text=True)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "SEED COMPLETE" in again.stdout
+    assert scalar(engine, "SELECT count(*) FROM kiosk_credentials") == 0
+    assert scalar(engine, "SELECT count(*) FROM kiosks WHERE code = 'KIOSK-001'") == 1
