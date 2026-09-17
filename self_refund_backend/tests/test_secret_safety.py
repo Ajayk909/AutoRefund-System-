@@ -87,3 +87,51 @@ def test_issue_staging_key_unknown_kiosk(app, monkeypatch):
     monkeypatch.setattr(manage_tenancy, "create_app", lambda: app)
     assert manage_tenancy.main(["issue-staging-key", "NOPE",
                                "--secret-name", "whatever"]) == 1
+
+
+def test_reset_staff_password_rotates_without_printing_it(app, capsys, monkeypatch):
+    """The old password stops working, the new one (never printed) does, and
+    the plaintext only ever reaches the fake Secrets Manager client."""
+    import manage_tenancy
+
+    monkeypatch.setattr(manage_tenancy, "create_app", lambda: app)
+    captured = {}
+    monkeypatch.setattr(manage_tenancy, "store_secret",
+                        lambda name, value, client=None: captured.update(name=name, value=value))
+
+    secret_name = "autorefund/dev/admin-password"
+    assert manage_tenancy.main(["reset-staff-password", "admin1",
+                               "--secret-name", secret_name]) == 0
+    out = capsys.readouterr().out
+
+    assert captured["name"] == secret_name
+    new_password = captured["value"]
+    assert new_password and new_password != "admin123"
+    assert new_password not in out
+    assert secret_name in out and "not printed" in out
+
+    client = app.test_client()
+    old = client.post("/api/staff/login", json={"username": "admin1", "password": "admin123"})
+    assert old.status_code == 401
+
+    new = client.post("/api/staff/login", json={"username": "admin1", "password": new_password})
+    assert new.status_code == 200
+
+
+def test_reset_staff_password_defaults_to_the_predictable_terraform_name(app, monkeypatch):
+    import manage_tenancy
+
+    app.config["ENVIRONMENT"] = "dev"
+    monkeypatch.setattr(manage_tenancy, "create_app", lambda: app)
+    captured = {}
+    monkeypatch.setattr(manage_tenancy, "store_secret",
+                        lambda name, value, client=None: captured.update(name=name, value=value))
+
+    assert manage_tenancy.main(["reset-staff-password", "admin1"]) == 0
+    assert captured["name"] == "autorefund/dev/admin-password"
+
+
+def test_reset_staff_password_unknown_username(app, monkeypatch):
+    import manage_tenancy
+    monkeypatch.setattr(manage_tenancy, "create_app", lambda: app)
+    assert manage_tenancy.main(["reset-staff-password", "nope"]) == 1

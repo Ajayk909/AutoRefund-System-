@@ -8,6 +8,7 @@ Manage retailers, stores and kiosks from the command line.
     python manage_tenancy.py issue-dev-key <KIOSK_CODE> [--write-env <path to kiosk_agent\.env>]
     python manage_tenancy.py issue-staging-key <KIOSK_CODE> [--secret-name <name>] [--days N]
     python manage_tenancy.py revoke-keys <KIOSK_CODE>
+    python manage_tenancy.py reset-staff-password <USERNAME> [--secret-name <name>]
 
 issue-dev-key creates a DEVELOPMENT key for the kiosk agent (shown once, or
 written to the agent's .env as KIOSK_DEV_KEY). Development keys only work
@@ -22,11 +23,22 @@ same predictable name Terraform pre-creates (as an empty placeholder, so
 its own manually-created secret). Expires after STAGING_KEY_MAX_DAYS
 (default 14) unless --days gives a shorter lifetime. Production kiosk
 enrollment replaces both key types in a later phase.
+
+reset-staff-password generates a new random password for an existing staff
+member, updates their password_hash, and writes the plaintext straight into
+Secrets Manager - never printed, never logged. By default the secret name is
+autorefund/<ENVIRONMENT>/admin-password (the same name seed.py and Terraform
+use); pass --secret-name for a different staff member's secret. All of that
+staff member's existing sessions keep working until they expire or log out -
+this rotates the password, it does not force a re-login.
 """
+import secrets as secrets_lib
 import sys
 
+from werkzeug.security import generate_password_hash
+
 from app import create_app, db
-from app.models import Kiosk, Retailer, Store
+from app.models import Kiosk, Retailer, Staff, Store
 from app.tenancy import device_auth, repository, setup
 from cloud_secrets import store_secret
 
@@ -95,6 +107,23 @@ def main(argv):
             store_secret(secret_name, key)
             print(f"Staging key for {kiosk.code} stored in Secrets Manager secret "
                  f"{secret_name!r} (value not printed).")
+            return 0
+        elif command == "reset-staff-password" and args:
+            staff = Staff.query.filter_by(username=args[0]).first()
+            if not staff:
+                print(f"Staff {args[0]} not found")
+                return 1
+            if "--secret-name" in args and args.index("--secret-name") + 1 < len(args):
+                secret_name = args[args.index("--secret-name") + 1]
+            else:
+                environment = app.config.get("ENVIRONMENT", "dev")
+                secret_name = f"autorefund/{environment}/admin-password"
+            new_password = secrets_lib.token_urlsafe(18)
+            staff.password_hash = generate_password_hash(new_password)
+            db.session.commit()
+            store_secret(secret_name, new_password)
+            print(f"Password for {staff.username} rotated and stored in Secrets Manager "
+                 f"secret {secret_name!r} (value not printed).")
             return 0
         elif command == "revoke-keys" and args:
             kiosk = repository.get_kiosk_by_code(args[0])
