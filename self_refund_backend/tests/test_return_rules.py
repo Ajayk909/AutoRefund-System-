@@ -246,13 +246,19 @@ def test_capture_cannot_be_reused_for_another_return(client):
 
 
 def test_expired_capture_is_not_used(client, app):
+    # Phase 2: photo freshness is enforced by the kiosk agent, which owns the camera.
+    from datetime import timedelta
+    from agent.store import now
+    store = app.kiosk_agent.extensions["agent_store"]
+    max_age = app.kiosk_agent.config["CAPTURE_MAX_AGE_SECONDS"]
+
     tx = _transaction(client)
     cap = _capture(client)
-    path = app.config["CAPTURE_DIR"] / cap["file_name"]
-    old = time.time() - app.config["CAPTURE_MAX_AGE_SECONDS"] - 5
-    os.utime(path, (old, old))
+    store.set_capture_created(cap["capture_id"], now() - timedelta(seconds=max_age + 5))
     r = _submit(client, tx, _item(tx, "111111"), 250, cap["capture_id"]).get_json()["refund"]
-    assert db.session.get(Refund, r["refund_id"]).image_path != f"captures/{cap['file_name']}"
+    assert r["image_captured"] is True  # the agent took a fresh photo instead
+    assert store.get_capture(cap["capture_id"])["used_at"] is None  # expired one not used
+    assert (app.config["CAPTURE_DIR"] / cap["file_name"]).exists()
 
 
 def test_photo_required_for_auto_approval_is_configurable(client, app):

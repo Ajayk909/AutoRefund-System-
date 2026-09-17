@@ -14,7 +14,6 @@ class ReturnPolicy:
     window_days: int
     retry_limit_after_rejection: int
     require_photo_for_auto_approval: bool
-    capture_max_age_seconds: int
 
 
 def policy_for(config, retailer_id=None):  # noqa: ARG001 - retailer used later
@@ -22,5 +21,4 @@ def policy_for(config, retailer_id=None):  # noqa: ARG001 - retailer used later
         window_days=config["RETURN_WINDOW_DAYS"],
         retry_limit_after_rejection=config["RETURN_RETRY_LIMIT_AFTER_REJECTION"],
         require_photo_for_auto_approval=config["REQUIRE_PHOTO_FOR_AUTO_APPROVAL"],
-        capture_max_age_seconds=config["CAPTURE_MAX_AGE_SECONDS"],
     )

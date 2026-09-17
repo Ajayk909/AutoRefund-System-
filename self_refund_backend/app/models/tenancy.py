@@ -71,8 +71,8 @@ class Store(db.Model):
 
 
 class Kiosk(db.Model):
-    """A physical kiosk. ``code`` is the value of KIOSK_ID in the kiosk's .env
-    (Phase 2 replaces this with device enrollment)."""
+    """A physical kiosk. ``code`` is the kiosk agent's KIOSK_ID. The agent
+    proves it is this kiosk with a credential (KioskCredential)."""
     __tablename__ = "kiosks"
 
     kiosk_id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

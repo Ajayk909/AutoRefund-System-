@@ -67,12 +67,19 @@ def test_normal_return_is_approved_with_image(client, app):
     assert refund["refund_amount"] == 2.99
     assert refund["image_captured"] is True
     stored = Refund.query.filter_by(refund_id=refund["refund_id"]).one()
-    assert stored.image_path == f"captures/{cap['file_name']}"
+    # Phase 2: the kiosk agent uploads the photo; the Core API stores it under
+    # its own name. It must be exactly the photo the customer saw, and the
+    # agent's local copy is deleted once the Core API has it.
+    import base64
+    assert stored.image_path.startswith("captures/evidence_")
+    evidence = app.config["CAPTURE_DIR"] / stored.image_path.split("/")[1]
+    assert evidence.read_bytes() == base64.b64decode(cap["preview_data_url"].split(",", 1)[1])
+    assert not (app.config["CAPTURE_DIR"] / cap["file_name"]).exists()
 
     # evidence image is NOT public; staff can view it
     image_url = f"/api/refunds/{refund['refund_id']}/image"
     assert client.get(image_url).status_code == 401
-    assert client.get(f"/api/captures/{cap['file_name']}").status_code == 401
+    assert client.get(f"/api/captures/{evidence.name}").status_code == 401
     from tests.conftest import login
     img = client.get(image_url, headers=login(client))
     assert img.status_code == 200 and img.mimetype == "image/jpeg"

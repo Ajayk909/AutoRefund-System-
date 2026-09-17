@@ -1,11 +1,14 @@
-"""
+r"""
 Load the demo retailer, store, kiosk, products, receipts and admin user.
 
 WARNING: this DELETES all existing returns, receipts, products, staff, kiosks,
 stores and retailers first. Run with --yes to skip the confirmation prompt.
 
-The demo kiosk uses KIOSK_ID from .env, so the kiosk works immediately.
+The demo kiosk is KIOSK-001 (or the KIOSK_ID environment variable). Afterwards
+give the kiosk agent its development key:
+    python manage_tenancy.py issue-dev-key KIOSK-001 --write-env ..\kiosk_agent\.env
 """
+import os
 import sys
 
 from app import create_app, db
@@ -30,7 +33,8 @@ with app.app_context():
         model.query.delete()
     db.session.commit()
 
-    kiosk_code = app.config["KIOSK_ID"]
+    # The kiosk agent's KIOSK_ID (kiosk_agent\.env). Override: set KIOSK_ID=...
+    kiosk_code = os.getenv("KIOSK_ID", "KIOSK-001")
     print(f"Adding retailer DEMO -> Ontario -> STORE-001 -> kiosk {kiosk_code}...")
     retailer = setup.create_retailer("DEMO", "Demo Retailer")
     ontario = setup.create_group(retailer, "CA-ON", "Ontario", group_type="province")
@@ -65,3 +69,5 @@ with app.app_context():
     print("\nSEED COMPLETE")
     print("Receipts: RCP-1001 (3 items), RCP-1002 (Yogurt Cup x3), RCP-0900 (outside return window)")
     print("admin1 / admin123  (demo only - change before any real use)")
+    print(f"\nNext: python manage_tenancy.py issue-dev-key {kiosk_code} "
+          "--write-env ..\\kiosk_agent\\.env")

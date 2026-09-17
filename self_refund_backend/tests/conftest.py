@@ -20,6 +20,7 @@ TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 # Database workflow tests only run when a disposable test database is given.
 collect_ignore = [] if TEST_DATABASE_URL else ["test_workflows.py"]
 
+from tests.kiosk_harness import attach_kiosk_system  # noqa: E402  (adds kiosk_agent to sys.path)
 import hardware  # noqa: E402
 from hardware.mock import MockCamera, MockScale  # noqa: E402
 from app import create_app, db  # noqa: E402
@@ -37,13 +38,16 @@ def app(tmp_path):
         "SQLALCHEMY_DATABASE_URI": TEST_DATABASE_URL,
         "CAPTURE_DIR": tmp_path / "captures",
         "TESTING": True,
+        # Not a Core API setting: it configures the test kiosk agent's identity
+        # (see tests/kiosk_harness.py). Tests change it to "move" the kiosk.
+        "KIOSK_ID": "KIOSK-001",
     })
     os.makedirs(app.config["CAPTURE_DIR"], exist_ok=True)
 
+    # Mock hardware now belongs to the kiosk agent that sits in front of the API.
     camera = MockCamera(app.config["CAPTURE_DIR"])
     scale = MockScale(250)
-    hardware.reset_devices()
-    hardware.set_devices(camera=camera, scale=scale)
+    attach_kiosk_system(app, tmp_path, camera, scale)
     app.mock_camera = camera
     app.mock_scale = scale
 

@@ -1,8 +1,6 @@
 """Tenant context for kiosk and staff requests."""
 from dataclasses import dataclass
 
-from flask import current_app, g
-
 from app.errors import DomainError
 from app.tenancy import repository
 
@@ -33,15 +31,6 @@ def kiosk_context_for(code):
                           "This kiosk is not accepting returns right now. "
                           "Please visit customer service.", 503)
     return KioskContext(retailer.retailer_id, store.store_id, kiosk.kiosk_id, kiosk.code)
-
-
-def current_kiosk():
-    """Kiosk context for this request, from the KIOSK_ID configuration."""
-    code = current_app.config["KIOSK_ID"]
-    cached = g.get("kiosk_context")
-    if cached is None or cached.kiosk_code != code:
-        g.kiosk_context = kiosk_context_for(code)
-    return g.kiosk_context
 
 
 def scope_for(staff):

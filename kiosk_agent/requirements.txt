@@ -1,0 +1,12 @@
+# AutoRefund kiosk agent - Windows 10/11 x64, Python 3.11-3.13
+Flask==3.1.3
+flask-cors==6.0.2
+python-dotenv==1.2.2
+requests==2.32.5
+colorama==0.4.6; sys_platform == "win32"
+
+# Hardware (moved from the backend in Phase 2)
+opencv-python==4.14.0.94   # USB camera (DirectShow / Media Foundation on Windows)
+numpy>=1.26,<3
+pyzbar==0.1.9              # camera barcode decoding (needs VC++ 2013 x64 runtime on Windows)
+hidapi==0.15.0             # USB HID scale (DYMO)

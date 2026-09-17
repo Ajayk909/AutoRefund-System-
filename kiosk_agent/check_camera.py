@@ -10,7 +10,7 @@ put in .env. Also reports which barcode decoder is available.
 """
 import cv2
 
-from config import Config
+from agent.config import Config
 from hardware import barcode
 from hardware.camera_service import OpenCVCamera, default_backends
 

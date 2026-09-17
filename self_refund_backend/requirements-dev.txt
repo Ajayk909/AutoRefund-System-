@@ -1,2 +1,5 @@
 -r requirements.txt
+# The integration tests run a real kiosk agent (with mock hardware) in front
+# of the Core API, so the agent's packages are needed to run the tests.
+-r ../kiosk_agent/requirements.txt
 pytest>=8

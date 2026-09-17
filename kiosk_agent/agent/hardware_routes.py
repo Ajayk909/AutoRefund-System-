@@ -1,19 +1,22 @@
-"""Kiosk hardware endpoints: scale, camera and barcode scanning.
+"""Kiosk hardware endpoints served by the agent: scale, camera, barcode.
 
-Device access goes through the ``hardware`` package interfaces, so a camera
-or scale model can be replaced without touching these routes.
+Moved from the Core API in Phase 2: only the agent touches hardware. Device
+access goes through the ``hardware`` package interfaces, so a camera or scale
+model can be replaced without touching these routes. Values returned here are
+for DISPLAY; the agent reads the scale again itself when a return is submitted.
 """
+import base64
 import logging
 
 import cv2
 from flask import Response, current_app, jsonify
 
-from app.api import api_bp
-from app.evidence import captures
+from agent import captures
+from agent.routes import agent_bp as api_bp, store
 from hardware import HardwareError, get_camera, get_scale
 from hardware.barcode import backend_name as barcode_backend_name
 
-log = logging.getLogger("autorefund.api")
+log = logging.getLogger("autorefund.agent.hardware")
 
 
 @api_bp.get("/scale/read")
@@ -144,18 +147,20 @@ def camera_stream():
 def camera_capture():
     """Take the item photo.
 
-    Returns an unguessable capture_id (the kiosk sends it with the return)
-    and an inline preview, so evidence files are never served publicly.
+    Returns an unguessable capture_id (the kiosk screen sends it with the
+    return) and an inline preview; the file stays on this PC until sent.
     """
     capture_dir = current_app.config["CAPTURE_DIR"]
     try:
-        photo = captures.take_photo(get_camera(), capture_dir)
+        photo = captures.take_photo(get_camera(), capture_dir, store())
         log.info("Image captured: %s", photo["file_name"])
+        with open(f"{capture_dir}/{photo['file_name']}", "rb") as fh:
+            preview = base64.b64encode(fh.read()).decode("ascii")
         return jsonify({
             "success": True,
             "capture_id": photo["capture_id"],
             "file_name": photo["file_name"],
-            "preview_data_url": captures.preview_data_url(capture_dir, photo["file_name"]),
+            "preview_data_url": f"data:image/jpeg;base64,{preview}",
         })
     except Exception as e:
         log.error("/camera/capture failed: %s", e)

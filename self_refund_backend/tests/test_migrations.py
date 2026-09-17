@@ -105,15 +105,15 @@ def test_phase0_database_upgrades_keeps_data_and_works(engine, tmp_path):
     check = alembic("check")
     assert check.returncode == 0 and "No new upgrade operations" in check.stdout + check.stderr
 
-    # the application works on the migrated data
+    # the application works on the migrated data (kiosk agent in front, as deployed)
     import hardware
     from app import create_app, db
     from hardware.mock import MockCamera, MockScale
+    from tests.kiosk_harness import attach_kiosk_system
 
     app = create_app({"SQLALCHEMY_DATABASE_URI": URL, "KIOSK_ID": "KIOSK-001",
                       "CAPTURE_DIR": tmp_path, "TESTING": True})
-    hardware.reset_devices()
-    hardware.set_devices(camera=MockCamera(tmp_path), scale=MockScale(150))
+    attach_kiosk_system(app, tmp_path, MockCamera(tmp_path), MockScale(150))
     try:
         with app.app_context():
             client = app.test_client()

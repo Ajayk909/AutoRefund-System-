@@ -5,7 +5,8 @@ Hardware access layer.
                   ->  real USB implementation  (camera_service, scale_service)
                       or MOCK implementation   (mock)  -- dev/testing only
 
-The concrete classes are selected from configuration (see config.py), so the
+The concrete classes are selected from configuration (the kiosk agent's
+agent/config.py, or settings passed to ``configure()``), so the
 application never imports a device-specific library directly.
 """
 import logging
@@ -21,10 +22,22 @@ _camera = None
 _scale = None
 
 
-def _config():
-    from config import Config
+_settings = None
 
-    return Config
+
+def configure(settings):
+    """Give the hardware layer its settings (the kiosk agent's config object).
+    Devices already created are kept; call reset_devices() to rebuild them."""
+    global _settings
+    _settings = settings
+
+
+def _config():
+    if _settings is None:
+        from agent.config import Config
+
+        return Config
+    return _settings
 
 
 def get_camera() -> CameraDevice:
