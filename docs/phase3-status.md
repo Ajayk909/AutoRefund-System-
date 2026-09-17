@@ -5,10 +5,9 @@ throughout: **Verified** (actually run/observed), **Implemented but not
 deployed** (code/config exists, correct on review, not exercised against
 real AWS), **Unable to verify** (not checked at all).
 
-Current stage: **3B in progress. Full dev infrastructure applied
-(Terraform's part of the ALB/ACM sequence is done). Stopped for approval
-before pushing an image / running migration+seed / starting the service for
-real.**
+Current stage: **3B in progress. Image built and pushed, migration run
+successfully. Stopped for approval before running seed (explicitly not run
+yet per instruction).**
 
 **All 58 Terraform-managed AWS resources now exist** (ACM cert from step 1 +
 57 from the full apply, `0 changed, 0 destroyed`, no errors):
@@ -24,15 +23,33 @@ real.**
 | Dev kiosk key secret (empty placeholder) | `autorefund/dev/kiosk/KIOSK-001` |
 | GitHub deploy role ARN | `arn:aws:iam::<AWS_ACCOUNT_ID>:role/autorefund-dev-github-deploy` |
 
-**Known, expected state right now**: the ECS service is running the
-`bootstrap` placeholder image tag (no real image has been pushed), so it is
-**not yet healthy** - this is expected and gets fixed by the next steps
-(build+push image, run migration, run seed, force a new deployment).
+**Image and migration - Verified:**
+- Built and pushed `autorefund-dev-core-api:271521c52e3cf2f7e646afa19e9ba5e9f9e408a6`
+  (the commit SHA this doc was committed at) to ECR. Confirmed present via
+  `aws ecr describe-images`.
+- Registered task definition revision `autorefund-dev-core-api:2` with this
+  image (revision 1 is still the `bootstrap` placeholder from Terraform's
+  apply; the ECS *service* has not been updated to revision 2 yet - only a
+  one-off task has used it so far).
+- Ran the migration as a one-off `aws ecs run-task` (FARGATE, public
+  subnets, ECS task security group, command override
+  `alembic upgrade head`), **not** the always-on service. **Exit code 0.**
+  CloudWatch logs (`/ecs/autorefund-dev-core-api`, stream
+  `core-api/core-api/682aafdcd56d4d01a5b805bc545967e5`) show all 6
+  revisions applied in order, ending at `e5b9c0d7f3a1` (Phase 2, kiosk
+  credentials) - matches `docs/architecture.md`'s migration table exactly.
+  No secrets appeared in the logs.
+- **Seed has deliberately NOT been run yet** (per instruction) - the
+  database has schema only, no demo data, no admin user.
+- The ECS **service** is still running task definition revision 1
+  (`bootstrap` image) and is still unhealthy - expected, since the service
+  hasn't been redeployed with revision 2 yet. That's the next step after
+  seed.
 
 **Not done yet** (remaining Stage 3B steps, each needs separate approval):
-build and push the Core API image to ECR (commit-SHA tag), run the
-migration one-off task, run the seed one-off task, deploy/confirm the ECS
-service healthy, add the second Namecheap CNAME (`api-dev` -> the ALB DNS
+run the seed one-off task, update the ECS service to task definition
+revision 2 and confirm it goes healthy, add the second Namecheap CNAME
+(`api-dev` -> the ALB DNS
 name above), verify HTTPS end-to-end, add GitHub Actions workflows.
 
 ---
