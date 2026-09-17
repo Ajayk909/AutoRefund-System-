@@ -5,10 +5,152 @@ throughout: **Verified** (actually run/observed), **Implemented but not
 deployed** (code/config exists, correct on review, not exercised against
 real AWS), **Unable to verify** (not checked at all).
 
-Current stage: **3B in progress. ECS->RDS read+write verified over HTTPS,
-staff auth confirmed, CloudWatch logs confirmed clean, S3/RDS network
-posture reconfirmed against the live resources. Stopped for approval before
-GitHub Actions workflows.**
+Current stage: **Dev has been fully verified end-to-end once, then
+destroyed to stop costs. Dev is currently EMPTY (0 AWS resources).** The
+"Saturday restart sequence" below is the exact, ready-to-run path back to
+where this session left off. GitHub Actions workflows are still not done
+(deferred - see "What is NOT done yet").
+
+## Dev is destroyed - Verified
+
+`terraform apply "destroy-dev.tfplan"` (the exact plan reviewed
+beforehand): **58 destroyed, 0 added, 0 changed**, no errors.
+
+Confirmed nothing billable remains in `ca-central-1`:
+- Load balancers: none matching `autorefund`
+- RDS instances: none matching `autorefund`
+- ECS clusters/services: none
+- NAT gateways: none
+- Elastic IPs: none at all (tagged or not)
+- Both Terraform-owned secrets (`autorefund/dev/admin-password`,
+  `autorefund/dev/kiosk/KIOSK-001`) are **fully gone** -
+  `aws secretsmanager describe-secret` returns `ResourceNotFoundException`
+  for both, not "scheduled for deletion". `recovery_window_in_days = 0`
+  worked exactly as designed: no manual `--force-delete-without-recovery`
+  step was needed this time, because no secret was ever created outside
+  Terraform's two placeholders (the `reset-staff-password` command was
+  built and tested locally but never run against the cloud - see below).
+
+**Not destroyed / unaffected** (as designed, never in Terraform's dev
+state): IAM user `autorefund-dev`, its `AdministratorAccess` policy, the
+budget `autorefund-monthly-25`.
+
+**Left dangling, harmless but needs redoing** (outside Terraform/AWS
+entirely): the two Namecheap CNAME records (ACM validation, and `api-dev`
+-> the now-deleted ALB) still exist at Namecheap pointing at nothing. They
+cost nothing but must be replaced - see the restart sequence.
+
+## Saturday restart sequence
+
+Exact commands to get back to a fully verified dev, in order. Each
+AWS-changing command still needs approval when you actually run this.
+
+**0. Before starting:**
+- Check your current public IP (`curl https://checkip.amazonaws.com`) and
+  update `allowed_ingress_cidrs` in the local, git-ignored
+  `infra/terraform/environments/dev/terraform.tfvars` if it changed.
+- Confirm `alarm_email` is still set in that same file.
+- `self_refund_frontend\.env.local` (git-ignored) still points
+  `VITE_API_ORIGIN` at `https://api-dev.autorefundkiosk.online` - no change
+  needed there, it'll work again once step 4 below is done.
+
+**1. Certificate (step 1 of the ALB/ACM split apply):**
+```powershell
+cd infra/terraform/environments/dev
+$env:TF_PLUGIN_CACHE_DIR = "D:\terraform-plugin-cache"
+terraform apply -target "module.alb_https.aws_acm_certificate.this"
+terraform output acm_validation_record_fqdn
+terraform output acm_validation_record_value
+```
+This is a **brand-new certificate** - the validation CNAME name will be
+**different from last time**. Do not reuse the old Namecheap record.
+
+**2. Namecheap CNAME #1 (ACM validation):**
+Host = the `acm_validation_record_fqdn` output with the trailing
+`.autorefundkiosk.online.` removed; Value = `acm_validation_record_value`
+(trailing dot removed); Type = CNAME; TTL = Automatic. Wait for it to
+resolve, then confirm:
+```powershell
+aws acm describe-certificate --certificate-arn <acm_certificate_arn output> --query Certificate.Status
+```
+Proceed only once this prints `ISSUED`.
+
+**3. Full apply (everything else):**
+```powershell
+terraform apply
+terraform output alb_dns_name
+```
+
+**4. Namecheap CNAME #2 (the API hostname):**
+Host = `api-dev`; Value = the `alb_dns_name` output; Type = CNAME; TTL =
+Automatic.
+
+**5. Build and push the image (commit-SHA tag):**
+```powershell
+cd ../../../../self_refund_backend
+$sha = git rev-parse HEAD
+docker build -t autorefund-dev-core-api:$sha .
+$token = aws ecr get-login-password --region ca-central-1
+docker login --username AWS --password $token <ecr_repository_url from output, without the tag>
+docker tag autorefund-dev-core-api:$sha <ecr_repository_url>:$sha
+docker push <ecr_repository_url>:$sha
+```
+
+**6. Register a task definition revision with the real image:**
+Fetch the current (bootstrap) task definition with
+`aws ecs describe-task-definition --task-definition autorefund-dev-core-api`,
+replace `containerDefinitions[0].image` with `<ecr_repository_url>:$sha`,
+and `aws ecs register-task-definition --cli-input-json file://...` with the
+family/roles/networkMode/cpu/memory/requiresCompatibilities carried over
+unchanged (see git history for the exact PowerShell used this cycle).
+
+**7. Run the migration one-off task:**
+```powershell
+aws ecs run-task --cluster autorefund-dev --task-definition autorefund-dev-core-api:<new revision> \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[<public subnet ids>],securityGroups=[<ecs task sg id>],assignPublicIp=ENABLED}" \
+  --overrides '{"containerOverrides":[{"name":"core-api","command":["alembic","upgrade","head"]}]}'
+```
+Wait with `aws ecs wait tasks-stopped`, then check `exitCode == 0` via
+`aws ecs describe-tasks`, and read the logs from
+`/ecs/autorefund-dev-core-api`, stream `core-api/core-api/<task-id>`.
+
+**8. Run the seed one-off task** (same network config, but override
+`taskRoleArn` to the **one-off task role** output
+`ecs_oneoff_task_role_arn`, since seed writes to Secrets Manager):
+```powershell
+--overrides '{"taskRoleArn":"<ecs_oneoff_task_role_arn output>","containerOverrides":[{"name":"core-api","command":["python","seed.py","--yes"]}]}'
+```
+Confirm exit code 0 and that the logs never print the password (only "...
+not printed.").
+
+**9. Deploy the service onto the real image:**
+```powershell
+aws ecs update-service --cluster autorefund-dev --service autorefund-dev-core-api --task-definition autorefund-dev-core-api:<new revision> --force-new-deployment
+aws ecs wait services-stable --cluster autorefund-dev --services autorefund-dev-core-api
+```
+
+**10. Verify:**
+```powershell
+Invoke-WebRequest https://api-dev.autorefundkiosk.online/api/health
+```
+Expect `200 {"status":"ok",...}`. Optionally repeat the staff-login and
+CORS-preflight checks from this cycle (see below) to fully re-confirm.
+
+**Rotating the admin password after restart** (built and tested locally
+this cycle, never run against the cloud): once seeded,
+`manage_tenancy.py reset-staff-password admin1` run as a one-off task
+(same `taskRoleArn` override as seed) generates a new password and writes
+it to `autorefund/dev/admin-password` without printing it - fetch it with
+`aws secretsmanager get-secret-value --secret-id autorefund/dev/admin-password --query SecretString --output text`
+when needed.
+
+## Record of what was verified before destroy
+
+Everything below happened against real AWS resources that **no longer
+exist** - kept as proof the design works and as a reference for the
+restart sequence above (exact ARNs/IDs/hostnames will all be different
+next time).
 
 **Staff auth / ECS->RDS read+write - Verified (over HTTPS, no secrets printed):**
 - Fetched the generated admin password from Secrets Manager into a local
@@ -35,8 +177,9 @@ GitHub Actions workflows.**
   `RestrictPublicBuckets`) are `true`.
 - `aws rds describe-db-instances`: `PubliclyAccessible: false`.
 
-**All 58 Terraform-managed AWS resources now exist** (ACM cert from step 1 +
-57 from the full apply, `0 changed, 0 destroyed`, no errors):
+**All 58 Terraform-managed AWS resources existed at this point** (ACM cert
+from step 1 + 57 from the full apply, `0 changed, 0 destroyed`, no errors;
+all since destroyed - see "Dev is destroyed" above):
 
 | Resource | Value |
 |---|---|
@@ -102,12 +245,24 @@ GitHub Actions workflows.**
   Permanently` -> `https://api-dev.autorefundkiosk.online:443/api/health`
   (HTTP->HTTPS redirect confirmed).
 
-**Not done yet** (remaining Stage 3B steps, each needs separate approval):
+**Not done yet** (remaining Stage 3B steps, each needs separate approval,
+and dev needs to be restarted first per the sequence above):
 issue the KIOSK-001 staging key (Stage 3C item, deferred), verify an
 evidence upload lands in S3 and is viewable only through the staff
-endpoint (no demo return has been submitted yet, so nothing has touched
-the evidence bucket), add GitHub Actions workflows (PR tests + OIDC deploy
-on push to main), one real end-to-end GitHub Actions run.
+endpoint (no demo return was ever submitted, so nothing touched the
+evidence bucket in this cycle), add GitHub Actions workflows (PR tests +
+OIDC deploy on push to main), one real end-to-end GitHub Actions run.
+
+**Also built, tested locally, never run against the cloud**:
+`manage_tenancy.py reset-staff-password <username> [--secret-name <name>]`
+(mirrors `issue-staging-key`'s pattern - generates a new random password,
+updates `password_hash`, writes it to Secrets Manager, never prints it;
+161 local tests pass including proof the old password stops working and
+the new one succeeds). An image containing this command
+(`autorefund-dev-core-api:b7903815f5410caf2a0bcd084f4b86d35192b2d6`) was
+built locally but **never pushed to ECR** - dev was destroyed before that
+push happened, so this command has only been exercised against the local
+test database, not the cloud.
 
 ---
 
