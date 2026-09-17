@@ -34,11 +34,11 @@ def return_result_to_dict(result):
     }
 
 
-def refund_to_staff_dict(refund, capture_dir):
+def refund_to_staff_dict(refund, storage):
     product = catalog.get(refund.retailer_id, refund.product_id)
     reviewer = db.session.get(Staff, refund.staff_id) if refund.staff_id else None
     quantity = refund.quantity or 1
-    has_image = captures.evidence_file(refund.image_path, capture_dir) is not None
+    has_image = captures.has_image(refund.image_path, storage)
     return {
         "refund_id": str(refund.refund_id),
         "item_name": product.name if product else "Unknown Item",

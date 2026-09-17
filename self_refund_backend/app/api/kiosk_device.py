@@ -19,7 +19,6 @@ from app.api import api_bp
 from app.api.serializers import product_to_dict, return_result_to_dict
 from app.catalog import repository as catalog
 from app.errors import DomainError
-from app.evidence import storage
 from app.receipts import service as receipts
 from app.returns import repository as returns_repository
 from app.returns import service as returns
@@ -92,14 +91,14 @@ def kiosk_submit_return():
     def obtain_photo():
         if not image:
             return None
-        path, digest = storage.store_jpeg(image.read(cfg["MAX_EVIDENCE_BYTES"] + 1),
-                                          cfg["CAPTURE_DIR"], cfg["MAX_EVIDENCE_BYTES"])
+        path, digest = current_app.evidence_storage.store_jpeg(
+            image.read(cfg["MAX_EVIDENCE_BYTES"] + 1), cfg["MAX_EVIDENCE_BYTES"])
         return returns.Photo(path, digest)
 
     result = returns.submit_return(
         req, kiosk=kiosk, policy=policy_for(cfg, kiosk.retailer_id),
         read_scale=read_scale, obtain_photo=obtain_photo,
-        discard_photo=lambda photo: storage.delete_stored(photo.relative_path, cfg["CAPTURE_DIR"]),
+        discard_photo=lambda photo: current_app.evidence_storage.delete_stored(photo.relative_path),
         camera_mock=camera.get("mock") is True, require_idempotency_key=True)
     status = 200 if result.replay else 201
     return jsonify({"success": True, "refund": return_result_to_dict(result)}), status

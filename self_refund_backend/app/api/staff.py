@@ -2,14 +2,13 @@
 import os
 from datetime import datetime
 
-from flask import current_app, g, jsonify, request, send_from_directory
+from flask import Response, current_app, g, jsonify, request
 
 from app import db
 from app.api import api_bp
 from app.api.serializers import refund_to_staff_dict
 from app.audit import service as audit
 from app.errors import DomainError
-from app.evidence import captures
 from app.identity import service as identity
 from app.identity.auth import REVIEW_ROLES, require_staff
 from app.ids import parse_uuid
@@ -20,8 +19,8 @@ from app.tenancy.context import scope_for
 from app.returns.states import APPROVED, PENDING_REVIEW, REFUNDED, REJECTED
 
 
-def _capture_dir():
-    return str(current_app.config["CAPTURE_DIR"])
+def _storage():
+    return current_app.evidence_storage
 
 
 def _staff_dict(staff):
@@ -71,7 +70,7 @@ def refund_logs():
     end = _parse_day(request.args.get("end_date"), "end_date", end_of_day=True)
     refunds = returns_repository.list_for_staff(scope_for(g.staff), start=start, end=end)
     return jsonify({"success": True,
-                    "refunds": [refund_to_staff_dict(r, _capture_dir()) for r in refunds]})
+                    "refunds": [refund_to_staff_dict(r, _storage()) for r in refunds]})
 
 
 @api_bp.get("/refunds/pending")
@@ -79,7 +78,7 @@ def refund_logs():
 def pending_refunds():
     refunds = returns_repository.list_for_staff(scope_for(g.staff), status=PENDING_REVIEW)
     return jsonify({"success": True,
-                    "refunds": [refund_to_staff_dict(r, _capture_dir()) for r in refunds]})
+                    "refunds": [refund_to_staff_dict(r, _storage()) for r in refunds]})
 
 
 def _decision_response(target):
@@ -89,7 +88,7 @@ def _decision_response(target):
             g.staff, refund_id, target,
             reason=data.get("reason"), payment_reference=data.get("payment_reference"))
         return jsonify({"success": True, "message": f"Return {target.replace('_', ' ')}",
-                        "refund": refund_to_staff_dict(refund, _capture_dir())})
+                        "refund": refund_to_staff_dict(refund, _storage())})
     return handler
 
 
@@ -117,13 +116,14 @@ def mark_refunded(refund_id):
 def get_refund_image(refund_id):
     uid = parse_uuid(refund_id)
     refund = returns_repository.get_for_staff(scope_for(g.staff), uid) if uid else None
-    path = captures.evidence_file(refund.image_path, _capture_dir()) if refund else None
-    if not path:
+    found = _storage().read(refund.image_path) if refund else None
+    if not found:
         return jsonify({"success": False, "message": "Image not found"}), 404
     audit.record("evidence_viewed", refund_id=refund.refund_id, staff_id=g.staff.staff_id,
                  retailer_id=refund.retailer_id, store_id=refund.store_id)
     db.session.commit()
-    response = send_from_directory(_capture_dir(), os.path.basename(path))
+    data, content_type = found
+    response = Response(data, mimetype=content_type)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -135,8 +135,10 @@ def get_capture_file(filename):
     may see (orphan photos and other retailers' photos are not served)."""
     name = os.path.basename(filename)
     refund = returns_repository.find_for_staff_by_image(scope_for(g.staff), f"captures/{name}")
-    if not refund or not captures.evidence_file(refund.image_path, _capture_dir()):
+    found = _storage().read(refund.image_path) if refund else None
+    if not found:
         return jsonify({"success": False, "message": "Image not found"}), 404
-    response = send_from_directory(_capture_dir(), name)
+    data, content_type = found
+    response = Response(data, mimetype=content_type)
     response.headers["Cache-Control"] = "no-store"
     return response
