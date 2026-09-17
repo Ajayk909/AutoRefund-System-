@@ -48,8 +48,12 @@ function ReceiptScanPage() {
       const response = await api.get(`/transactions/${value}`);
       localStorage.setItem("transactionData", JSON.stringify(response.data.transaction));
       navigate("/customer/items");
-    } catch {
-      setError("We couldn't find that receipt. Please check the number and try again.");
+    } catch (err) {
+      // 404 = unknown receipt. Other errors (e.g. this kiosk isn't set up)
+      // carry a customer-safe message from the server.
+      setError(err?.response?.status === 404 || !err?.response?.data?.message
+        ? "We couldn't find that receipt. Please check the number and try again."
+        : err.response.data.message);
     } finally { setLoading(false); }
   };
 

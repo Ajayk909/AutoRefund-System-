@@ -53,9 +53,9 @@ The first prototype (Sheridan College capstone, 2026) ran on a **Raspberry Pi**.
 │        │  axios (REST)            ▲ keyboard input                   │
 │        ▼                          │                                  │
 │  self_refund_backend  Flask 3     │   http://127.0.0.1:5000/api      │
-│   ├─ app/routes.py      business rules: receipts, weight tolerance,  │
-│   │                     duplicate check, review, audit log           │
-│   ├─ app/models.py      SQLAlchemy models ──► PostgreSQL (local)     │
+│   ├─ app/api/           HTTP routes (kiosk, hardware, staff)         │
+│   ├─ app/returns/ ...   domain services + rules (see docs/architecture.md)
+│   ├─ app/models/        SQLAlchemy models ──► PostgreSQL (local)     │
 │   └─ hardware/          hardware abstraction layer                   │
 │        ├─ base.py            CameraDevice / ScaleDevice interfaces   │
 │        ├─ camera_service.py  OpenCV (DirectShow / Media Foundation)──► USB camera
@@ -74,10 +74,16 @@ The first prototype (Sheridan College capstone, 2026) ran on a **Raspberry Pi**.
 | `setup-autorefund.bat` | One-time install of Python/Node dependencies |
 | `init-database.bat` | Creates the DB user/database, runs migrations, optional demo data |
 | `check-hardware.bat` | Camera and scale diagnostics |
+| `self_refund_backend/manage_tenancy.py` | List / add retailers, stores and kiosks |
+| `docs/architecture.md` | Code structure, tenant model, migrations, deferred work |
 | `start-autorefund.bat` / `stop-autorefund.bat` | Start/stop the whole system |
 | `push-to-github.bat` | One-time: turns the original capstone folder into this Git repository and pushes it (no force-push) |
 
-**Database tables** (PostgreSQL): `products`, `transactions`, `transaction_items`, `refunds`, `staff`, `audit_logs`.
+**Code structure**: the backend is a modular monolith organised by business domain (`returns`, `receipts`, `catalog`, `tenancy`, `identity`, `evidence`, `audit`), with thin HTTP routes in `app/api/`. **Read [`docs/architecture.md`](docs/architecture.md) before changing the backend.**
+
+**Tenants**: data is organised as **Retailer → (optional store groups) → Store → Kiosk**. All retailers share one database; every tenant-owned row carries `retailer_id`, and composite foreign keys stop data of two retailers from being linked. Barcodes and receipt numbers are unique **per retailer**. The kiosk's `KIOSK_ID` in `.env` must exist in the `kiosks` table (`python manage_tenancy.py list`).
+
+**Database tables** (PostgreSQL): `retailers`, `store_groups`, `stores`, `kiosks`, `products`, `product_identifiers`, `transactions`, `transaction_items`, `refunds` (returns), `staff`, `staff_sessions`, `audit_logs`.
 
 Photos are saved as JPEG files in `self_refund_backend/captures/`. Only the relative path `captures/<file>` is stored in `refunds.image_path`.
 
@@ -91,13 +97,13 @@ Photos are saved as JPEG files in `self_refund_backend/captures/`. Only the rela
 | GET | `/products/lookup/<barcode>` | product info |
 | GET | `/scale/live`, `/scale/read` | weight in grams (`503` if the scale is unavailable) |
 | GET | `/camera/stream`, `/camera/preview`, `/camera/health` | live MJPEG / single frame / status |
-| POST | `/camera/capture` | save a photo, returns `image_path` |
+| POST | `/camera/capture` | take a photo, returns `capture_id` + inline preview |
 | GET | `/receipt/scan` | decode a barcode from the camera |
-| POST | `/refunds/start` | create a refund (weight check + duplicate check) |
-| GET | `/refunds/pending`, `/refunds/logs` | employee views |
-| POST | `/refunds/<id>/approve`, `/refunds/<id>/reject` | employee decision |
-| POST | `/staff/login` | employee login |
-| GET | `/captures/<file>` | evidence image |
+| POST | `/refunds/start` | create a return (backend reads scale; quantity, window, duplicate, idempotency) |
+| GET | `/refunds/pending`, `/refunds/logs` | employee views (own retailer / store only) |
+| POST | `/refunds/<id>/approve`, `/refunds/<id>/reject`, `/refunds/<id>/mark-refunded` | employee decisions |
+| POST | `/staff/login`, `/staff/logout`; GET `/staff/me` | employee session |
+| GET | `/refunds/<id>/image`, `/captures/<file>` | evidence image (staff, same tenant) |
 
 ## 3. Requirements
 
@@ -142,7 +148,9 @@ init-database.bat
 
 > **Coming from the Raspberry Pi folder?** Its `self_refund_frontend\node_modules` holds Linux ARM binaries, and `self_refund_backend\.venv` is a Linux environment. `setup-autorefund.bat` replaces both: `npm ci` reinstalls `node_modules`, and the old `.venv` is renamed to `.venv-raspberrypi-old`.
 
-**Demo data**: the `seed.py` step **deletes all existing data**, then loads 3 products, receipt `RCP-1001` and employee `admin1` / `admin123`. Change or remove that account before any real use.
+**Demo data**: the `seed.py` step **deletes all existing data**, then creates retailer `DEMO` → group `Ontario` → store `STORE-001` → a kiosk named after your `KIOSK_ID`, four products, receipts `RCP-1001`, `RCP-1002` (quantity 3) and `RCP-0900` (outside the return window), and employee `admin1` / `admin123`. Change or remove that account before any real use.
+
+**Upgrading an existing database** (keeps your data): run `init-database.bat` and answer **N** to demo data, or `.venv\Scripts\python -m alembic upgrade head`. Existing data moves into retailer `DEFAULT` / store `DEFAULT-STORE`, and a kiosk row is created for `KIOSK-001` and every kiosk code already used. If your `KIOSK_ID` is something else, add it: `python manage_tenancy.py add-kiosk DEFAULT DEFAULT-STORE <your KIOSK_ID>`.
 
 <details>
 <summary>Manual installation (without the .bat files)</summary>
@@ -171,7 +179,7 @@ All backend settings live in `self_refund_backend/.env`. See `.env.example` for 
 | `FLASK_HOST` / `FLASK_PORT` | `127.0.0.1` / `5000` | Use `0.0.0.0` only if other PCs must reach the API |
 | `FLASK_DEBUG` | `false` | Never `true` on a kiosk (the debugger allows remote code execution) |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | allowed frontend origins |
-| `KIOSK_ID` | `KIOSK-001` | stored on every refund; the browser cannot override it |
+| `KIOSK_ID` | `KIOSK-001` | this kiosk's code; must exist in the `kiosks` table (it decides the store and retailer). The browser cannot override it |
 | `RETURN_WINDOW_DAYS` | `30` | days after purchase a return is accepted |
 | `RETURN_RETRY_LIMIT_AFTER_REJECTION` | `1` | times a customer may try again after a rejection (`0` = never) |
 | `REQUIRE_PHOTO_FOR_AUTO_APPROVAL` | `true` | no photo → employee review |
@@ -249,7 +257,17 @@ set TEST_DATABASE_URL=postgresql://refund_user:YOUR_PASSWORD@localhost:5432/refu
 
 Without `TEST_DATABASE_URL`, only the hardware unit tests run (scale packet decoding, camera and scale failure handling, barcode decoding).
 
-Covered scenarios (63 tests):
+**Migration tests** need a *second* empty database (all its tables are dropped). They build a real Phase 0 database, upgrade it to the current version, use it through the app, then downgrade:
+
+```bat
+psql -U postgres -h localhost -c "CREATE DATABASE refund_migration_test OWNER refund_user"
+set MIGRATION_TEST_DATABASE_URL=postgresql://refund_user:YOUR_PASSWORD@localhost:5432/refund_migration_test
+.venv\Scripts\python -m pytest
+```
+
+Without it, `test_migrations.py` is skipped.
+
+Covered scenarios (94 tests):
 
 - normal return → approved, with a photo; tolerance boundary; weight mismatch → pending review
 - weight read by the backend; a weight or kiosk id sent by the browser is ignored; empty/unstable scale refused; scale disconnected → no refund
@@ -265,6 +283,9 @@ Covered scenarios (63 tests):
 - approve/reject record the employee, reason and audit entry; illegal state changes → 409
 - `approved → refunded` requires a POS reference and cannot happen before approval
 - camera failure → 503 with a friendly message; scale failure → 503; camera receipt scan; log date filter
+- **tenancy**: retailer → group → store → kiosk links; unknown or disabled kiosk/store/retailer refused; database refuses cross-retailer kiosks, groups, receipt lines, identifiers and returns; barcodes and receipt numbers unique per retailer only; one primary identifier per product
+- **cross-tenant isolation**: the same barcode and receipt number resolve to each retailer's own data; another retailer's ids are "not found"; duplicate rules and idempotency keys don't leak across retailers; staff can't list, decide on or view evidence of another retailer's returns; store-limited staff only see their store
+- **migrations**: Phase 0 data survives the upgrade, the app works on it, downgrade restores it, unsafe downgrade refused
 
 **Frontend**
 
@@ -283,6 +304,9 @@ npm run lint
 - **Customer endpoints trust the local network.** Staff endpoints are authenticated, but the kiosk endpoints (receipt lookup, scale, camera, submit) are open to anything that can reach the API. Keep `FLASK_HOST=127.0.0.1`. Device authentication arrives with the kiosk agent (Phase 2).
 - **No receipt lookup rate limit.** Receipt numbers could be guessed by a local script. Planned with the cloud API (WAF + per-kiosk limits).
 - **Staff roles are not differentiated yet.** All three roles may review returns; the `@require_staff(...)` decorator is ready for narrower rules.
+- **Kiosk identity is configuration.** `KIOSK_ID` picks the store and retailer; anyone who can edit `.env` could point a kiosk at another store. Secure kiosk enrollment is Phase 2.
+- **One return policy for all retailers** (from `.env`). The code asks `policy_for(retailer)`, so per-retailer policies can be added without changing the rules.
+- **Usernames are unique across all retailers**, so login needs no retailer field.
 - **Login rate limit is in memory** (per backend process) and resets when the backend restarts.
 - **Customer flow state is still in `localStorage`** (receipt and selected item, no personal data). It moves into the kiosk agent session in Phase 2.
 - **No payment integration.** `approved` means verified; staff record the POS refund with *Mark refunded at POS*.

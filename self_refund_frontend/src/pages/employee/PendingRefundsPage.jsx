@@ -103,7 +103,7 @@ function PendingRefundsPage() {
                     <div className="pr-field"><span className="pr-label">Why flagged</span><span className="pr-val">{item.decision_reason || "—"}</span></div>
                     <div className="pr-field"><span className="pr-label">Quantity</span><span className="pr-val pr-mono">{item.quantity}</span></div>
                     <div className="pr-field"><span className="pr-label">Barcode</span><span className="pr-val pr-mono">{item.barcode || "—"}</span></div>
-                    <div className="pr-field"><span className="pr-label">Kiosk</span><span className="pr-val pr-mono">{item.kiosk_id}</span></div>
+                    <div className="pr-field"><span className="pr-label">Store / Kiosk</span><span className="pr-val pr-mono">{item.store_code} · {item.kiosk_code}</span></div>
                   </div>
                   {item.image_url ? (
                     <div className="pr-image-preview">
