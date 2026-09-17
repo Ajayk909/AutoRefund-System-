@@ -5,30 +5,35 @@ throughout: **Verified** (actually run/observed), **Implemented but not
 deployed** (code/config exists, correct on review, not exercised against
 real AWS), **Unable to verify** (not checked at all).
 
-Current stage: **3B in progress. Step 1 of the ALB/ACM sequence
-(certificate validated). Stopped for approval before step 2 (the full
-apply).**
+Current stage: **3B in progress. Full dev infrastructure applied
+(Terraform's part of the ALB/ACM sequence is done). Stopped for approval
+before pushing an image / running migration+seed / starting the service for
+real.**
 
-**Real AWS resources now exist** (this is no longer plan-only):
-- ACM certificate for `api-dev.autorefundkiosk.online`:
-  `arn:aws:acm:ca-central-1:<AWS_ACCOUNT_ID>:certificate/eb3082b8-152a-4dca-9d71-92d30a6e366d`,
-  status **`ISSUED`** (verified with `aws acm describe-certificate`). Created
-  via `terraform apply -target module.alb_https.aws_acm_certificate.this`
-  (only this one resource - `1 added, 0 changed, 0 destroyed`). The
-  Namecheap validation CNAME
-  (`_4deb48f69c791dbeb066e86813f93121.api-dev` ->
-  `_f569680a31cadbbedeabd544e6f59cc4.wzccmgtwzk.acm-validations.aws`) has
-  been added and resolved.
-- **Next step (needs your explicit approval)**: a normal full
-  `terraform apply` (no `-target`) creates everything else - VPC, RDS, ECR,
-  S3, ECS, ALB, GitHub OIDC, monitoring, plus the
-  `aws_acm_certificate_validation` resource (should complete immediately
-  since the certificate is already `ISSUED`) and the HTTPS listener that
-  depends on it. After that, add the second Namecheap record: `api-dev` ->
-  the ALB's DNS name (from the apply's `alb_dns_name` output).
+**All 58 Terraform-managed AWS resources now exist** (ACM cert from step 1 +
+57 from the full apply, `0 changed, 0 destroyed`, no errors):
 
-Nothing else has been created yet (no VPC/RDS/ECS/ALB/S3/ECR/etc.), no image
-pushed, no migration/seed run, no GitHub Actions workflow added yet.
+| Resource | Value |
+|---|---|
+| ALB DNS name | `autorefund-dev-alb-1886817951.ca-central-1.elb.amazonaws.com` |
+| ECR repo | `<AWS_ACCOUNT_ID>.dkr.ecr.ca-central-1.amazonaws.com/autorefund-dev-core-api` |
+| RDS address | `autorefund-dev-db.cj2aygqoyvfq.ca-central-1.rds.amazonaws.com` |
+| Evidence S3 bucket | `autorefund-dev-evidence-<AWS_ACCOUNT_ID>` |
+| ECS cluster / service | `autorefund-dev` / `autorefund-dev-core-api` |
+| Admin password secret (empty placeholder) | `autorefund/dev/admin-password` |
+| Dev kiosk key secret (empty placeholder) | `autorefund/dev/kiosk/KIOSK-001` |
+| GitHub deploy role ARN | `arn:aws:iam::<AWS_ACCOUNT_ID>:role/autorefund-dev-github-deploy` |
+
+**Known, expected state right now**: the ECS service is running the
+`bootstrap` placeholder image tag (no real image has been pushed), so it is
+**not yet healthy** - this is expected and gets fixed by the next steps
+(build+push image, run migration, run seed, force a new deployment).
+
+**Not done yet** (remaining Stage 3B steps, each needs separate approval):
+build and push the Core API image to ECR (commit-SHA tag), run the
+migration one-off task, run the seed one-off task, deploy/confirm the ECS
+service healthy, add the second Namecheap CNAME (`api-dev` -> the ALB DNS
+name above), verify HTTPS end-to-end, add GitHub Actions workflows.
 
 ---
 
