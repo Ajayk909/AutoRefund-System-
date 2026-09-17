@@ -47,3 +47,15 @@ desktop.ini
 
 # one-off migration bundle used by push-to-github.bat
 *.bundle
+
+# ---- Terraform -------------------------------------------------------------
+# .terraform.lock.hcl is intentionally NOT ignored - it pins provider
+# versions and should be committed.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log

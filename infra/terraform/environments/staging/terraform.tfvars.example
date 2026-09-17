@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (git-ignored) if you ever need `terraform plan`
+# to use real values instead of the placeholder defaults. This environment
+# is never applied in Phase 3.
+
+allowed_ingress_cidrs = ["203.0.113.5/32"]
+alarm_email           = "you@example.com"

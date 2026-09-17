@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (git-ignored) and fill in your own values.
+
+# Your current public IP(s), so the ALB accepts your traffic.
+# Find it with: curl https://checkip.amazonaws.com
+# Update this and re-apply whenever it changes (e.g. demoing at college).
+allowed_ingress_cidrs = ["203.0.113.5/32"]
+
+# Where CloudWatch alarm emails go. Not a real email in this example file.
+alarm_email = "you@example.com"
