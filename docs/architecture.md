@@ -11,29 +11,197 @@ before changing the backend.
 | Phase | Goal | Status |
 |---|---|---|
 | 0 | Stabilise the Windows kiosk, fix security and business-rule problems | Done |
-| **1** | **Domain structure + tenant-ready database** | **Done** |
-| 2 | Kiosk agent: device identity, local session, trusted hardware service | Next |
-| 3+ | Cloud API (AWS), Cognito, S3 evidence, AI verification, retailer integrations | Later |
+| 1 | Domain structure + tenant-ready database | Done |
+| **2** | **Windows kiosk agent + Core API boundary** | **Done** |
+| 3+ | Cloud (AWS), Cognito, S3 evidence, AI verification, retailer integrations | Later |
 
-Everything still runs on **one Windows PC**: React kiosk UI, Flask backend,
-local PostgreSQL, USB camera, DYMO scale and barcode scanner.
+Three programs run on the kiosk PC today. The Core API will move to the
+cloud later; the kiosk agent and the UI stay on the kiosk.
 
 ```
-┌──────────────────────────── Windows kiosk PC ─────────────────────────────┐
-│                                                                            │
-│  React UI (customer + employee)  ──HTTP──►  Flask backend  ──►  PostgreSQL │
-│                                              │                             │
-│                                              └──► hardware/  ──► camera,   │
-│                                                                  scale     │
-│  USB barcode scanner ──(keyboard input)──► React UI                        │
-└────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────── Windows kiosk PC ─────────────────────────────────┐
+│                                                                                    │
+│  Browser: React UI (self_refund_frontend, :5173)                                   │
+│    │ customer screens                         │ employee screens                   │
+│    ▼ http://127.0.0.1:5100/api                ▼ http://127.0.0.1:5000/api          │
+│  ┌───────────────────────────┐   device key   ┌─────────────────────────────────┐  │
+│  │ Kiosk agent (kiosk_agent) │ ─────────────► │ Core API (self_refund_backend)  │  │
+│  │ • camera, DYMO scale,     │  /api/kiosk/*  │ • tenants, receipts, catalog    │  │
+│  │   barcode decoding        │                │ • return rules, state machine   │  │
+│  │ • kiosk identity + key    │                │ • staff auth, review, audit     │  │
+│  │ • SQLite: session,        │                │ • evidence storage              │  │
+│  │   captures, outbox        │                └───────────────┬─────────────────┘  │
+│  └───────┬───────────────────┘                                │                    │
+│          ▼ USB                                                ▼                    │
+│   webcam · DYMO M10 · (scanner types into the browser)    PostgreSQL               │
+└────────────────────────────────────────────────────────────────────────────────────┘
+          later: the Core API + PostgreSQL move to AWS behind HTTPS
 ```
 
 ---
 
-## 2. Backend structure: a modular monolith
+## 2. Kiosk agent and Core API boundary (Phase 2)
 
-One Flask application, organised by **business domain**. There are no
+### Who does what
+
+| Part | Responsible for | Must NOT be trusted for / must NOT do |
+|---|---|---|
+| **React UI** | Screens, navigation, instructions, showing weight/preview/results | Weight, kiosk identity, authorization, eligibility, decisions |
+| **Kiosk agent** | Hardware, kiosk identity + credential, reading the authoritative weight, taking/sending the photo, local session, outbox, talking to the Core API | Deciding anything about a return; approving or refunding (even offline) |
+| **Core API** | Tenant/kiosk resolution, receipts, products, eligibility, window, quantity, duplicates, idempotency, weight verification, state machine, evidence, staff auth, audit | Touching hardware; trusting browser values |
+
+Anything that decides money is in the Core API. The agent only measures and
+forwards; the browser only displays and lets the customer choose.
+
+### Hardware ownership
+
+Only the agent imports the `hardware` package (`kiosk_agent/hardware/`:
+OpenCV camera, hidapi DYMO scale, pyzbar barcode, mock devices). The Core API
+has no hardware code and no hardware packages. The handheld scanner is a USB
+keyboard and still types into the browser.
+
+### Local communication: React → agent
+
+Plain HTTP on `127.0.0.1:5100`, same paths the screens used before Phase 2:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/health` | agent alive |
+| GET | `/api/kiosk/status` | identity (kiosk → store → retailer), Core API reachability, hardware, outbox counts, session |
+| GET | `/api/transactions/<receipt>` | receipt via Core API (starts a session) |
+| GET | `/api/products/lookup/<barcode>` | product via Core API |
+| POST | `/api/refunds/start` | submit a return (browser sends only receipt line + quantity + capture id) |
+| POST | `/api/session/end` | customer finished |
+| POST | `/api/outbox/reconcile` | ask the Core API about unconfirmed submissions |
+| GET | `/api/scale/live`, `/api/scale/read` | weight **for display** |
+| GET | `/api/camera/stream`, `/preview`, `/health`; POST `/api/camera/capture` | camera |
+| GET | `/api/receipt/scan`, `/api/hardware/status` | camera barcode scan, diagnostics |
+
+Local protections: the agent only listens on loopback (it refuses to start
+otherwise), POSTs from any other web page origin are refused, and browser
+headers (e.g. a staff token) are never forwarded.
+
+### API communication: agent → Core API
+
+HTTP to `CORE_API_URL` (today `http://127.0.0.1:5000`, later HTTPS to AWS).
+Every call carries the kiosk credential.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/kiosk/me` | which kiosk this credential is (kiosk, store, retailer) |
+| GET | `/api/kiosk/receipts/<receipt>` | receipt + eligibility, own retailer only |
+| GET | `/api/kiosk/products/<barcode>` | product in own retailer's catalog |
+| POST | `/api/kiosk/returns` | multipart: `metadata` JSON + optional `image` JPEG; `Idempotency-Key` required |
+| GET | `/api/kiosk/returns/by-key/<key>` | status of a submission this kiosk made |
+
+`metadata` = `transaction_id`/`receipt_number`, `item_id`/`product_id`/`barcode`,
+`quantity`, `scale: {weight_grams, stable, device, mock}`, `camera: {device, mock}`.
+The Core API re-checks the reading (stable, positive, finite), validates the
+JPEG (magic bytes, size limit), stores it under its own name with a SHA-256,
+and applies every Phase 0/1 rule. Evidence is only stored when the cheap
+eligibility checks pass and is deleted if the return is not created.
+
+The browser can no longer reach return creation at all: the old
+`/api/refunds/start`, `/api/transactions`, `/api/products/lookup` and hardware
+routes are gone from the Core API, and `/api/kiosk/*` needs a kiosk credential.
+
+### Kiosk identity and device authentication
+
+```
+agent: KioskIdentity ──► DevelopmentKeyIdentity (KIOSK_ID + KIOSK_DEV_KEY in kiosk_agent\.env)
+core : DeviceAuthenticator ──► DevelopmentKeyAuthenticator (kiosk_credentials table)
+```
+
+* The **Core API decides the kiosk from the credential alone**. Headers, query
+  strings and body fields claiming another kiosk are ignored.
+* The agent's `KIOSK_ID` is what it *expects* to be. It checks `/api/kiosk/me`
+  and refuses to take returns on a mismatch (`KIOSK_IDENTITY_MISMATCH`).
+* Unknown/expired/revoked key → customer sees "This kiosk is not set up yet";
+  disabled kiosk/store/retailer → "not accepting returns right now".
+
+**Development keys (temporary, deliberately not production-grade)**
+
+| Property | Value |
+|---|---|
+| Header | `Authorization: AutoRefund-Dev-Key ardev_<random>` |
+| Secret | 256-bit random, shown once; only SHA-256 stored in `kiosk_credentials` |
+| Scope | one kiosk; expires after `DEV_KEY_MAX_DAYS` (30); revocable; last use recorded |
+| Guard | Core API **refuses to start** with `DEVICE_AUTH_MODE=development` unless `FLASK_HOST` is loopback |
+| Create | `python manage_tenancy.py issue-dev-key KIOSK-001 --write-env ..\kiosk_agent\.env` (or `init-database.bat`) |
+| Revoke | `python manage_tenancy.py revoke-keys KIOSK-001` |
+
+It is a bearer secret over localhost HTTP, stored in a plain `.env` file, with
+no enrollment, rotation or hardware binding. That is acceptable only because
+everything runs on one PC. Production replaces both classes (see "When AWS
+arrives"); the rest of the code does not change.
+
+### Local SQLite store (kiosk agent)
+
+`kiosk_agent\data\kiosk_agent.sqlite3` - not a business database.
+
+| Table | Holds | Never holds |
+|---|---|---|
+| `kiosk_config` | identity snapshot confirmed by the Core API | keys, passwords |
+| `sessions` | receipt number / transaction id, timestamps (expire after 15 min) | names, emails, payment |
+| `captures` | capture id, local file name, created/used time | – |
+| `outbox` | idempotency key, status, attempts, transaction/item id, Core API answer code, refund id | prices, amounts, product names, customer data |
+
+Outbox status: `sending → accepted | rejected | unconfirmed`, and after
+reconciliation `unconfirmed → accepted | not_received`.
+
+### Failure behaviour
+
+| Situation | Customer sees | What happens | Refund created? |
+|---|---|---|---|
+| Normal | Approved / Under review | agent → Core API → decision | per rules |
+| Core API down, timeout, 5xx, garbage | "We can't reach the returns service right now. **Nothing has been refunded.** Please try again…" (503 `CORE_UNAVAILABLE`) | outbox `unconfirmed`; same idempotency key kept for retry | **No** (never assumed) |
+| Core API did the work but the answer was lost | same message | retry with same key → Core API returns the **same** return (replay) | exactly one |
+| Scale disconnected | "The scale isn't responding…" (503) | Core API not contacted | No |
+| Item not on scale / moving | "Place your item on the scale and keep it still…" (409) | Core API not contacted | No |
+| Camera unavailable | normal result, usually "Under review" | sent without photo → employee review | per rules |
+| Kiosk agent not running | "The kiosk isn't ready right now. Nothing has been refunded…" | – | No |
+| Key missing/revoked, kiosk disabled, identity mismatch | "not set up" / "not accepting returns" | nothing sent | No |
+| Already returned, window expired, … | Core API's message | outbox `rejected` | No |
+
+The agent never re-sends a return on its own and never approves anything
+offline. `/api/outbox/reconcile` only asks the Core API what happened.
+
+### Security boundaries
+
+| Boundary | Protection |
+|---|---|
+| Browser → agent | loopback only; other origins refused; only line + quantity + capture id accepted |
+| Agent → Core API | kiosk credential; identity from credential only; Idempotency-Key required |
+| Browser → Core API | only staff endpoints (server-side sessions, tenant scope) and public health |
+| Evidence | agent sends bytes; Core API names, hashes and stores; staff-only, tenant-scoped viewing |
+| Secrets | DB password only in `self_refund_backend\.env`; kiosk key only in `kiosk_agent\.env`; nothing in React |
+
+### Temporary for development
+
+* development kiosk keys and `DEVICE_AUTH_MODE=development`
+* HTTP (not HTTPS) between agent and Core API on the same PC
+* Core API, PostgreSQL and evidence folder on the kiosk PC
+* employee screens served from the kiosk UI build
+
+### When AWS arrives (later phases)
+
+| Today | Later |
+|---|---|
+| `CORE_API_URL=http://127.0.0.1:5000` | HTTPS endpoint in AWS (load balancer + WAF) |
+| Development key in `.env` | `EnrolledDeviceIdentity`: key pair in the Windows key store, one-time enrollment code, short-lived tokens, revocation |
+| `DevelopmentKeyAuthenticator` | token/certificate authenticator; development mode disabled |
+| Evidence in `captures\` | S3 (the agent's upload stays the same shape; storage module changes) |
+| PostgreSQL on the kiosk | RDS |
+| Staff login in the Core API | Cognito |
+| Staff screens in the kiosk UI | separate staff portal |
+
+The agent's UI endpoints, the outbox and the Core API's return rules stay.
+
+---
+
+## 3. Core API structure: a modular monolith
+
+The Core API is one Flask application, organised by **business domain**. There are no
 microservices: one process, one database, one deployment. Each domain is a
 normal Python package with the same small set of files.
 
@@ -41,8 +209,8 @@ normal Python package with the same small set of files.
 self_refund_backend/
 ├─ app/
 │  ├─ api/            HTTP only: read the request, call a service, return JSON
-│  │   ├─ kiosk.py        receipts, product lookup, submit a return
-│  │   ├─ hardware.py     scale, camera, receipt barcode scan
+│  │   ├─ kiosk_device.py kiosk agent endpoints (device credential required)
+│  │   ├─ kiosk.py        public health check
 │  │   ├─ staff.py        login, review queue, decisions, evidence
 │  │   └─ serializers.py  JSON shapes
 │  ├─ returns/        the heart of AutoRefund
@@ -54,15 +222,15 @@ self_refund_backend/
 │  │   └─ repository.py   database queries
 │  ├─ receipts/       receipt lookup (service + repository)
 │  ├─ catalog/        products and identifiers (repository)
-│  ├─ tenancy/        retailers, stores, kiosks; KioskContext + StaffScope
+│  ├─ tenancy/        retailers, stores, kiosks; KioskContext + StaffScope;
+│  │                  device_auth.py (kiosk credentials)
 │  ├─ identity/       staff login, sessions, @require_staff
-│  ├─ evidence/       item photos (capture ids, previews, files)
+│  ├─ evidence/       storing uploaded photos, finding them for staff
 │  ├─ audit/          audit event recording
 │  ├─ models/         SQLAlchemy models, one file per domain
 │  ├─ errors.py       DomainError (customer-safe message + code + HTTP status)
 │  ├─ ids.py, timeutil.py
 │  └─ __init__.py     create_app()
-├─ hardware/          device interfaces + real USB and mock implementations
 ├─ migrations/        Alembic
 ├─ tests/
 ├─ seed.py            demo data
@@ -74,13 +242,29 @@ self_refund_backend/
 ```
 api/  ──►  service  ──►  rules          (pure decisions)
                     ──►  repository     ──►  models  ──►  PostgreSQL
-                    ──►  hardware interfaces
+```
+
+Hardware is not part of the Core API; measurements arrive from the kiosk agent.
+
+```
+kiosk_agent/
+├─ agent/
+│  ├─ routes.py, hardware_routes.py   HTTP for the kiosk UI
+│  ├─ submissions.py                  submit a return, reconcile the outbox
+│  ├─ identity.py, identity_check.py  kiosk identity + confirmation
+│  ├─ core_client.py                  Core API client (CoreUnavailable)
+│  ├─ store.py, captures.py           SQLite store, local photos
+│  └─ config.py                       kiosk_agent\.env
+├─ hardware/                          camera, DYMO scale, barcode, mocks
+├─ scripts/import_backend_settings.py
+├─ check_camera.py, test_scale.py, run_agent.py
+└─ tests/                             unit tests (no database)
 ```
 
 | Layer | Does | Must not |
 |---|---|---|
 | `api/*.py` | Parse the request, pick the tenant context, call a service, format JSON | Contain business rules or SQL |
-| `service.py` | Run a use case in order (validate, read hardware, lock, decide, save, audit) | Know about HTTP |
+| `service.py` | Run a use case in order (validate, take measurements, lock, decide, save, audit) | Know about HTTP or hardware |
 | `rules.py` | Decide (eligible? weight OK? approve or review?) | Commit or talk to hardware |
 | `repository.py` | Query the database, always scoped to a tenant | Decide business outcomes |
 | `models/` | Table definitions | Contain behaviour |
@@ -96,11 +280,12 @@ safe to show a customer; technical detail goes to the log.
 * A new step in submitting a return → `returns/service.py`
 * A new query → the domain's `repository.py`, **taking a retailer id or scope**
 * A new endpoint → `api/`, calling a service
-* A new device model → a new class in `hardware/` implementing the interface
+* A new device model → a new class in `kiosk_agent/hardware/` implementing the interface
+* Something the kiosk screen needs from hardware → `kiosk_agent/agent/`
 
 ---
 
-## 3. Tenant model
+## 4. Tenant model
 
 AutoRefund is designed to serve many retailers. The hierarchy is:
 
@@ -173,17 +358,16 @@ Retailer DEMO : barcode 111111 → anything else            (refused)
 Retailer integrations (Phase 8) will map a retailer's catalog feed into these
 tables through an adapter; nothing is Walmart- or retailer-specific.
 
-### Kiosk identity (today)
+### Kiosk identity
 
-`KIOSK_ID` in `.env` must match a row in `kiosks`. Every kiosk request
-resolves it to kiosk → store → retailer. An unknown or disabled kiosk gets
-a friendly "not set up" message and cannot look up receipts or create
-returns. **This is configuration, not security**: anyone who can edit `.env`
-can change it. Phase 2 replaces it with kiosk enrollment and device keys.
+A kiosk agent's credential (`kiosk_credentials`) resolves to kiosk → store →
+retailer on every Core API call (section 2). An unknown, revoked or disabled
+kiosk cannot look up receipts or create returns.
 
 ```bat
 python manage_tenancy.py list
 python manage_tenancy.py add-kiosk DEMO STORE-001 KIOSK-002
+python manage_tenancy.py issue-dev-key KIOSK-002 --write-env ..\kiosk_agent\.env
 ```
 
 ### Staff scope (today)
@@ -195,13 +379,14 @@ regions, roles per scope) come with Cognito in Phase 4.
 
 ---
 
-## 4. Returns: rules that must not regress
+## 5. Returns: rules that must not regress
 
 | Rule | Where |
 |---|---|
-| Weight read by the backend from the scale, never from the browser | `returns/service.py` |
-| Kiosk identity from configuration, never from the browser | `api/kiosk.py`, `tenancy/context.py` |
-| Photo must be a recent, unused capture from this backend, else backend takes it | `evidence/captures.py` |
+| Weight read by the kiosk agent from the scale, never from the browser; re-validated by the Core API | `kiosk_agent/agent/submissions.py`, `returns/service.py` |
+| Kiosk identity from the device credential, never from the request | `tenancy/device_auth.py` |
+| Photo must be a recent, unused capture, else the agent takes one; Core API validates and names it | `kiosk_agent/agent/captures.py`, `evidence/storage.py` |
+| Communication failure is never success; no offline refunds | `kiosk_agent/agent/submissions.py` |
 | No photo → employee review (configurable) | `returns/rules.py::decide` |
 | Quantity accounting per receipt line; rejected units released | `returns/rules.py` |
 | Retry limit after rejection | `returns/service.py` |
@@ -218,7 +403,7 @@ AI verification runs asynchronously (Phase 6/7).
 
 ---
 
-## 5. Migrations
+## 6. Migrations
 
 Alembic, one migration per logical change, never editing an applied one.
 
@@ -229,6 +414,7 @@ Alembic, one migration per logical change, never editing an applied one.
 | `b3f1c2d4e5a6` | Phase 0: quantity, idempotency, `refunded`, staff sessions |
 | `c7d2e8f1a9b0` | Phase 1: retailers, store groups, stores, kiosks + DEFAULT tenant |
 | `d4a1b6c3e2f5` | Phase 1: tenant ownership, product identifiers, per-retailer receipts |
+| `e5b9c0d7f3a1` | Phase 2: kiosk credentials, evidence SHA-256 |
 
 Upgrading a Phase 0 database puts all existing data into retailer
 `DEFAULT` / store `DEFAULT-STORE` and creates a kiosk row for every kiosk code
@@ -246,7 +432,7 @@ receipt number, because Phase 0 cannot store that.
 
 ---
 
-## 6. Deliberately deferred
+## 7. Deliberately deferred
 
 | Item | Why not now | Planned |
 |---|---|---|
@@ -259,4 +445,9 @@ receipt number, because Phase 0 cannot store that.
 | `return_policies` table | One policy from `.env`; code already goes through `policy_for()` | When a second real retailer needs different rules |
 | PostgreSQL Row-Level Security | App scoping + composite FKs cover today's single app | Cloud phase |
 | Renaming `refunds` → `returns` | Rename churn with no functional gain | Possibly with the cloud API |
-| Kiosk enrollment / device keys, offline outbox, AWS, AI, POS | Out of Phase 1 scope | Phases 2+ |
+| Production kiosk enrollment, key pairs, token rotation | Needs a real deployment target and PKI decisions | With the cloud API |
+| HTTPS between agent and Core API | Both on one PC today | With the cloud API |
+| Automatic outbox re-sending | Would act without the customer present | Not planned for returns |
+| Moving all UI flow state into the agent | Screens still keep display data in localStorage (no personal data) | When the UI is reworked |
+| Heartbeats / fleet monitoring | Only `/api/kiosk/status` locally | Monitoring phase |
+| AWS, AI, POS, payments | Out of scope | Later phases |

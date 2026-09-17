@@ -4,6 +4,12 @@ These tests need the **real kiosk PC** (Windows, USB webcam, DYMO M10 scale,
 handheld USB barcode scanner). They could not be run in the cloud session
 that wrote the Phase 0 code, so every item below is currently **NOT TESTED**.
 
+> **Since Phase 2** the kiosk agent owns the hardware: camera and scale settings
+> are in `kiosk_agent\.env`, test photos go to `kiosk_agent\captures\`, and
+> `start-autorefund.bat` also opens an *AutoRefund Kiosk Agent* window. Before a
+> customer return works, `init-database.bat` must have created the kiosk agent key
+> (check <http://127.0.0.1:5100/api/kiosk/status> shows `"state": "OK"`).
+
 Fill in the *Result* column (PASS / FAIL + note). For every FAIL, copy the
 matching lines from `self_refund_backend\logs\autorefund.log` and the console
 window, and note what was on screen.

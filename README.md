@@ -29,12 +29,13 @@ The first prototype (Sheridan College capstone, 2026) ran on a **Raspberry Pi**.
 
 1. **Receipt**: scan the receipt barcode with the handheld scanner, hold it up to the camera, or type the number.
 2. **Select item**: the receipt's items are listed with how many can still be returned. Items already returned, waiting for review, or outside the return window (default 30 days) can't be selected, and the screen says why.
-3. **Weigh and photo**: put the item on the scale. A live weight is shown for guidance and the camera takes a photo. When the customer submits, **the backend reads the scale itself**; the browser never sends the weight.
+3. **Weigh and photo**: put the item on the scale. A live weight is shown for guidance and the camera takes a photo. When the customer submits, **the kiosk agent reads the scale itself** and sends the reading and photo to the Core API; the browser never sends the weight.
 4. **Result**
    - *Approved* when the weight is within the product's tolerance (for example ±10 %) **and** a photo was captured.
    - *Pending review* when the weight is outside the tolerance or no photo could be taken. An employee then decides.
    - Returning more units than were bought is **blocked** and logged. A rejected unit may be tried again once (configurable).
    - *Approved* does not mean the money has moved: there is no payment integration yet.
+   - If the returns service can't be reached, the screen says **nothing has been refunded** and the customer can try again. A retry never creates a second return.
 
 **Employee flow**: log in (server-side session), then use the dashboard.
 
@@ -45,64 +46,75 @@ The first prototype (Sheridan College capstone, 2026) ran on a **Raspberry Pi**.
 
 ## 2. Architecture
 
+Three programs run on the kiosk PC. **Read [`docs/architecture.md`](docs/architecture.md) before changing the code.**
+
 ```
-┌──────────── Windows PC ──────────────────────────────────────────────┐
-│                                                                      │
-│  Browser (Edge/Chrome, kiosk mode)                                   │
-│   └─ self_refund_frontend  React 19 + Vite   http://127.0.0.1:5173  │
-│        │  axios (REST)            ▲ keyboard input                   │
-│        ▼                          │                                  │
-│  self_refund_backend  Flask 3     │   http://127.0.0.1:5000/api      │
-│   ├─ app/api/           HTTP routes (kiosk, hardware, staff)         │
-│   ├─ app/returns/ ...   domain services + rules (see docs/architecture.md)
-│   ├─ app/models/        SQLAlchemy models ──► PostgreSQL (local)     │
-│   └─ hardware/          hardware abstraction layer                   │
-│        ├─ base.py            CameraDevice / ScaleDevice interfaces   │
-│        ├─ camera_service.py  OpenCV (DirectShow / Media Foundation)──► USB camera
-│        ├─ barcode.py         pyzbar (ZBar) / OpenCV fallback         │
-│        ├─ scale_service.py   hidapi, USB HID postal scale ─────────► USB scale
-│        └─ mock.py            SIMULATED devices (dev/tests only)      │
-│                                                                      │
-│  USB barcode scanner ──(acts as a keyboard)──► browser ──────────────┘
-└──────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────── Windows kiosk PC ──────────────────────────────┐
+│                                                                             │
+│  Browser: React kiosk UI (self_refund_frontend)   http://127.0.0.1:5173     │
+│     │ customer screens                     │ employee screens               │
+│     ▼                                      ▼                                │
+│  Kiosk agent (kiosk_agent)          Core API (self_refund_backend)          │
+│  http://127.0.0.1:5100/api  ─────►  http://127.0.0.1:5000/api  ──► PostgreSQL│
+│   • camera, DYMO scale,     device   • receipts, catalog, tenants           │
+│     barcode decoding          key    • return rules, state machine          │
+│   • kiosk identity + key             • staff login, review, audit           │
+│   • SQLite: session, outbox          • evidence photos                      │
+│     │ USB                                                                   │
+│     ▼                                                                       │
+│  webcam · DYMO M10       USB barcode scanner ──(keyboard)──► browser        │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+| Part | Role |
+|---|---|
+| **React UI** | Screens only. Customer screens talk to the kiosk agent; employee screens talk to the Core API. It is never trusted for weight, identity or decisions. |
+| **Kiosk agent** | Owns the hardware and the kiosk's credential. Reads the authoritative weight, takes the photo, sends them to the Core API, and records each attempt in a local outbox. Never approves or refunds anything itself. |
+| **Core API** | Makes every decision: which kiosk/store/retailer is calling, receipt and product validation, eligibility, quantity, duplicates, idempotency, weight check, state machine, staff authorization, audit. |
 
 | Folder / file | Purpose |
 |---|---|
-| `self_refund_backend/` | Flask API, database models, Alembic migrations, hardware layer, tests |
+| `self_refund_backend/` | Core API: Flask app, database models, Alembic migrations, tests |
+| `kiosk_agent/` | Windows kiosk agent: hardware layer, local store, Core API client, tests |
 | `self_refund_frontend/` | React kiosk UI (customer + employee) |
-| `setup-autorefund.bat` | One-time install of Python/Node dependencies |
-| `init-database.bat` | Creates the DB user/database, runs migrations, optional demo data |
-| `check-hardware.bat` | Camera and scale diagnostics |
-| `self_refund_backend/manage_tenancy.py` | List / add retailers, stores and kiosks |
-| `docs/architecture.md` | Code structure, tenant model, migrations, deferred work |
-| `start-autorefund.bat` / `stop-autorefund.bat` | Start/stop the whole system |
+| `setup-autorefund.bat` | One-time install of the Core API, kiosk agent and UI |
+| `init-database.bat` | Creates the DB user/database, runs migrations, optional demo data, kiosk agent key |
+| `check-hardware.bat` | Camera and scale diagnostics (uses the kiosk agent) |
+| `start-autorefund.bat` / `stop-autorefund.bat` | Start/stop all three programs |
+| `self_refund_backend/manage_tenancy.py` | List / add retailers, stores, kiosks; issue / revoke kiosk agent keys |
+| `docs/architecture.md` | Roles, boundary, failure behaviour, tenant model, migrations, deferred work |
 | `push-to-github.bat` | One-time: turns the original capstone folder into this Git repository and pushes it (no force-push) |
 
-**Code structure**: the backend is a modular monolith organised by business domain (`returns`, `receipts`, `catalog`, `tenancy`, `identity`, `evidence`, `audit`), with thin HTTP routes in `app/api/`. **Read [`docs/architecture.md`](docs/architecture.md) before changing the backend.**
+**Tenants**: data is organised as **Retailer → (optional store groups) → Store → Kiosk**. All retailers share one database; every tenant-owned row carries `retailer_id`, and composite foreign keys stop data of two retailers from being linked. Barcodes and receipt numbers are unique **per retailer**.
 
-**Tenants**: data is organised as **Retailer → (optional store groups) → Store → Kiosk**. All retailers share one database; every tenant-owned row carries `retailer_id`, and composite foreign keys stop data of two retailers from being linked. Barcodes and receipt numbers are unique **per retailer**. The kiosk's `KIOSK_ID` in `.env` must exist in the `kiosks` table (`python manage_tenancy.py list`).
+**Kiosk identity**: the kiosk agent proves which kiosk it is with a **development key** (`KIOSK_DEV_KEY` in `kiosk_agent\.env`). The Core API decides the kiosk, store and retailer from that key alone. Development keys are temporary: they expire, can be revoked, and only work while the Core API listens on `127.0.0.1`.
 
-**Database tables** (PostgreSQL): `retailers`, `store_groups`, `stores`, `kiosks`, `products`, `product_identifiers`, `transactions`, `transaction_items`, `refunds` (returns), `staff`, `staff_sessions`, `audit_logs`.
+**Database tables** (PostgreSQL): `retailers`, `store_groups`, `stores`, `kiosks`, `kiosk_credentials`, `products`, `product_identifiers`, `transactions`, `transaction_items`, `refunds` (returns), `staff`, `staff_sessions`, `audit_logs`.
 
-Photos are saved as JPEG files in `self_refund_backend/captures/`. Only the relative path `captures/<file>` is stored in `refunds.image_path`.
+**Photos**: taken by the agent, uploaded to the Core API, and stored as `self_refund_backend\captures\evidence_<random>.jpg` with a SHA-256 hash. The agent deletes its local copy once the Core API has answered.
 
-**Main API endpoints** (all under `/api`)
+**Kiosk agent endpoints** (for the customer screens, `http://127.0.0.1:5100/api`)
 
 | Method | Path | Use |
 |---|---|---|
-| GET | `/health` | backend alive |
-| GET | `/hardware/status` | shows which devices are real or mocked, and whether they're connected |
-| GET | `/transactions/<receipt>` | receipt + items (with `is_refundable`) |
-| GET | `/products/lookup/<barcode>` | product info |
-| GET | `/scale/live`, `/scale/read` | weight in grams (`503` if the scale is unavailable) |
-| GET | `/camera/stream`, `/camera/preview`, `/camera/health` | live MJPEG / single frame / status |
-| POST | `/camera/capture` | take a photo, returns `capture_id` + inline preview |
-| GET | `/receipt/scan` | decode a barcode from the camera |
-| POST | `/refunds/start` | create a return (backend reads scale; quantity, window, duplicate, idempotency) |
+| GET | `/health`, `/kiosk/status` | agent alive; identity, Core API reachability, hardware, outbox |
+| GET | `/transactions/<receipt>`, `/products/lookup/<barcode>` | receipt / product (from the Core API) |
+| POST | `/refunds/start` | submit a return (agent reads scale + photo) |
+| GET | `/scale/live`, `/scale/read` | weight for display |
+| GET | `/camera/stream`, `/camera/preview`, `/camera/health`; POST `/camera/capture` | camera |
+| GET | `/receipt/scan`, `/hardware/status` | camera barcode scan, device diagnostics |
+| POST | `/session/end`, `/outbox/reconcile` | end session; check unconfirmed submissions |
+
+**Core API endpoints** (`http://127.0.0.1:5000/api`)
+
+| Method | Path | Use |
+|---|---|---|
+| GET | `/health` | Core API alive |
+| GET | `/kiosk/me`, `/kiosk/receipts/<receipt>`, `/kiosk/products/<barcode>`, `/kiosk/returns/by-key/<key>` | **kiosk agent only** (device key) |
+| POST | `/kiosk/returns` | **kiosk agent only**: create a return (metadata + photo, idempotency key) |
+| POST | `/staff/login`, `/staff/logout`; GET `/staff/me` | employee session |
 | GET | `/refunds/pending`, `/refunds/logs` | employee views (own retailer / store only) |
 | POST | `/refunds/<id>/approve`, `/refunds/<id>/reject`, `/refunds/<id>/mark-refunded` | employee decisions |
-| POST | `/staff/login`, `/staff/logout`; GET `/staff/me` | employee session |
 | GET | `/refunds/<id>/image`, `/captures/<file>` | evidence image (staff, same tenant) |
 
 ## 3. Requirements
@@ -134,23 +146,36 @@ REM 1. get the code
 git clone https://github.com/Ajayk909/AutoRefund-System-.git
 cd AutoRefund-System-
 
-REM 2. install Python + Node dependencies, create self_refund_backend\.env
+REM 2. install the Core API, kiosk agent and UI; creates both .env files
 setup-autorefund.bat
 
 REM 3. edit self_refund_backend\.env (at least the DATABASE_URL password)
 notepad self_refund_backend\.env
 
-REM 4. create the database + tables (+ optional demo data)
+REM 4. tables, optional demo data, and the kiosk agent's key
 init-database.bat
+
+REM 5. check camera/scale settings for the agent
+notepad kiosk_agent\.env
 ```
 
-`init-database.bat` can create the `refund_user` login and `refund_kiosk` database for you (it asks for the `postgres` password). The password you choose must match the one in `DATABASE_URL`.
+`init-database.bat` can create the `refund_user` login and `refund_kiosk` database for you (it asks for the `postgres` password). The password you choose must match the one in `DATABASE_URL`. At the end it offers to **create the kiosk agent key**; answer **Y**. It writes `KIOSK_ID` and `KIOSK_DEV_KEY` into `kiosk_agent\.env`.
+
+**Demo data**: the `seed.py` step **deletes all existing data**, then creates retailer `DEMO` → group `Ontario` → store `STORE-001` → kiosk `KIOSK-001`, four products, receipts `RCP-1001`, `RCP-1002` (quantity 3) and `RCP-0900` (outside the return window), and employee `admin1` / `admin123`. Change or remove that account before any real use.
+
+### Upgrading an existing kiosk PC (keeps your data)
+
+1. `stop-autorefund.bat`
+2. Get the new code (`git pull`, or apply the bundle you were given).
+3. `setup-autorefund.bat`. It installs the kiosk agent and creates `kiosk_agent\.env`, copying your existing camera and scale settings (for example `CAMERA_INDEX`) from `self_refund_backend\.env`. It never copies the database password.
+4. `init-database.bat`: answer **N** to creating the database, **N** to demo data, **Y** to the kiosk agent key, and accept `KIOSK-001` (or type your kiosk code).
+5. Check `kiosk_agent\.env`, then `start-autorefund.bat`.
+
+Hardware settings left in `self_refund_backend\.env` are no longer used and can be deleted.
+
+A Phase 0 database moves into retailer `DEFAULT` / store `DEFAULT-STORE`, and a kiosk row is created for `KIOSK-001` and every kiosk code already used. If your kiosk code is something else, add it first: `.venv\Scripts\python manage_tenancy.py add-kiosk DEFAULT DEFAULT-STORE <code>`.
 
 > **Coming from the Raspberry Pi folder?** Its `self_refund_frontend\node_modules` holds Linux ARM binaries, and `self_refund_backend\.venv` is a Linux environment. `setup-autorefund.bat` replaces both: `npm ci` reinstalls `node_modules`, and the old `.venv` is renamed to `.venv-raspberrypi-old`.
-
-**Demo data**: the `seed.py` step **deletes all existing data**, then creates retailer `DEMO` → group `Ontario` → store `STORE-001` → a kiosk named after your `KIOSK_ID`, four products, receipts `RCP-1001`, `RCP-1002` (quantity 3) and `RCP-0900` (outside the return window), and employee `admin1` / `admin123`. Change or remove that account before any real use.
-
-**Upgrading an existing database** (keeps your data): run `init-database.bat` and answer **N** to demo data, or `.venv\Scripts\python -m alembic upgrade head`. Existing data moves into retailer `DEFAULT` / store `DEFAULT-STORE`, and a kiosk row is created for `KIOSK-001` and every kiosk code already used. If your `KIOSK_ID` is something else, add it: `python manage_tenancy.py add-kiosk DEFAULT DEFAULT-STORE <your KIOSK_ID>`.
 
 <details>
 <summary>Manual installation (without the .bat files)</summary>
@@ -164,6 +189,13 @@ psql -U postgres -h localhost -v db_password=YOUR_PASSWORD -f scripts\create_dat
 .venv\Scripts\python -m alembic upgrade head
 .venv\Scripts\python seed.py
 
+cd ..\kiosk_agent
+py -3 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+copy .env.example .env
+cd ..\self_refund_backend
+.venv\Scripts\python manage_tenancy.py issue-dev-key KIOSK-001 --write-env ..\kiosk_agent\.env
+
 cd ..\self_refund_frontend
 npm ci
 ```
@@ -171,21 +203,39 @@ npm ci
 
 ## 5. Configuration
 
-All backend settings live in `self_refund_backend/.env`. See `.env.example` for the full list. `.env` is git-ignored, so never commit it.
+Each program has its own `.env` (git-ignored, never commit it). See the `.env.example` files for the full lists.
+
+**Core API**: `self_refund_backend\.env`
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATABASE_URL` | – | `postgresql://refund_user:<password>@localhost:5432/refund_kiosk` |
-| `FLASK_HOST` / `FLASK_PORT` | `127.0.0.1` / `5000` | Use `0.0.0.0` only if other PCs must reach the API |
+| `FLASK_HOST` / `FLASK_PORT` | `127.0.0.1` / `5000` | must stay loopback while `DEVICE_AUTH_MODE=development` |
 | `FLASK_DEBUG` | `false` | Never `true` on a kiosk (the debugger allows remote code execution) |
-| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | allowed frontend origins |
-| `KIOSK_ID` | `KIOSK-001` | this kiosk's code; must exist in the `kiosks` table (it decides the store and retailer). The browser cannot override it |
+| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | origins allowed for the employee screens |
+| `DEVICE_AUTH_MODE` | `development` | how kiosk agents authenticate (only `development` exists) |
+| `DEV_KEY_MAX_DAYS` | `30` | lifetime of a kiosk agent development key |
+| `MAX_EVIDENCE_BYTES` | `5242880` | largest photo the agent may upload |
 | `RETURN_WINDOW_DAYS` | `30` | days after purchase a return is accepted |
 | `RETURN_RETRY_LIMIT_AFTER_REJECTION` | `1` | times a customer may try again after a rejection (`0` = never) |
 | `REQUIRE_PHOTO_FOR_AUTO_APPROVAL` | `true` | no photo → employee review |
-| `CAPTURE_MAX_AGE_SECONDS` | `900` | a kiosk photo must be used within this time |
 | `STAFF_SESSION_HOURS` | `8` | employee login lifetime |
-| `CAPTURE_DIR` / `LOG_DIR` | `captures` / `logs` | relative to `self_refund_backend\` or absolute (`D:\AutoRefund\captures`) |
+| `CAPTURE_DIR` / `LOG_DIR` | `captures` / `logs` | evidence photos and logs |
+
+**Kiosk agent**: `kiosk_agent\.env`
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AGENT_HOST` / `AGENT_PORT` | `127.0.0.1` / `5100` | the agent refuses any non-loopback host |
+| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | the kiosk UI; POSTs from other origins are refused |
+| `CORE_API_URL` | `http://127.0.0.1:5000` | Core API address |
+| `CORE_API_TIMEOUT_SECONDS` | `10` | after this the customer gets the "nothing has been refunded" message |
+| `KIOSK_ID` | `KIOSK-001` | the kiosk this agent expects to be |
+| `KIOSK_DEV_KEY` | – | development key (`manage_tenancy.py issue-dev-key` / `init-database.bat`) |
+| `AGENT_DB_PATH` | `data\kiosk_agent.sqlite3` | local session / captures / outbox |
+| `CAPTURE_DIR` / `LOG_DIR` | `captures` / `logs` | photos waiting to be sent; `kiosk-agent.log` |
+| `CAPTURE_MAX_AGE_SECONDS` | `900` | a photo must be used within this time |
+| `SESSION_TIMEOUT_SECONDS` | `900` | kiosk session expiry |
 | `HARDWARE_MODE` | `real` | `real` or `mock` (simulated devices, **development only**) |
 | `CAMERA_MODE` / `SCALE_MODE` | = `HARDWARE_MODE` | override per device |
 | `CAMERA_INDEX` | empty (auto 0–3) | Windows camera number |
@@ -195,13 +245,13 @@ All backend settings live in `self_refund_backend/.env`. See `.env.example` for 
 | `SCALE_READ_TIMEOUT_MS` | `2000` | |
 | `MOCK_SCALE_GRAMS` | `250` | weight reported by the mock scale |
 
-Per-product weight tolerance is stored in the database (`products.weight_tolerance_percent`), not in code.
+**Kiosk UI**: only needed if an address differs from the default. Create `self_refund_frontend\.env.local` with `VITE_API_ORIGIN=...` (Core API) and/or `VITE_AGENT_ORIGIN=...` (kiosk agent).
 
-Frontend: only if the backend is **not** at `http://127.0.0.1:5000`, create `self_refund_frontend/.env.local` with `VITE_API_ORIGIN=http://<host>:5000`.
+Per-product weight tolerance is stored in the database (`products.weight_tolerance_percent`), not in code.
 
 ## 6. Connecting the hardware
 
-Plug everything in, then run **`check-hardware.bat`**.
+Plug everything in, **stop AutoRefund** (`stop-autorefund.bat`; only one program may use the camera and scale at a time), then run **`check-hardware.bat`**. All camera and scale settings go in `kiosk_agent\.env`.
 
 ### Barcode scanner (USB HID keyboard)
 
@@ -216,36 +266,40 @@ Scanners that only work in serial/COM (RS-232/USB-CDC) mode are **not** supporte
 
 1. Plug in the webcam and close any app that uses it (Camera, Teams, Zoom).
 2. Go to Windows **Settings → Privacy & security → Camera** and turn on *Camera access* and *Let desktop apps access your camera*.
-3. `check-hardware.bat` tries indexes 0–3 with DirectShow and Media Foundation and saves a test photo to `self_refund_backend\captures\`.
-4. If the PC has a built-in camera too, set `CAMERA_INDEX` to the USB camera's index.
+3. `check-hardware.bat` tries indexes 0–3 with DirectShow and Media Foundation and saves a test photo to `kiosk_agent\captures\`.
+4. If the PC has more than one camera (a built-in webcam, or **OBS Studio's virtual camera**), set `CAMERA_INDEX` to the real camera's index. Never use a virtual camera for evidence.
 5. The camera also reads receipt barcodes. Code-128 receipts (such as `RCP-1001`) need pyzbar and the VC++ 2013 runtime. Without them, the camera can only read EAN/UPC codes. The handheld scanner is the recommended method.
 
 ### Scale (USB HID)
 
 1. Plug in the scale and switch it on. Windows lists it under *Human Interface Devices*. No driver is needed.
-2. `check-hardware.bat` (or `.venv\Scripts\python test_scale.py --list`) lists all HID devices. Find the scale's VID/PID and set `SCALE_VENDOR_ID` / `SCALE_PRODUCT_ID` if they differ from DYMO M10 (`0x0922` / `0x8003`; the DYMO M25 is `0x8004`).
+2. `check-hardware.bat` (or, in `kiosk_agent`, `.venv\Scripts\python test_scale.py --list`) lists all HID devices. Find the scale's VID/PID and set `SCALE_VENDOR_ID` / `SCALE_PRODUCT_ID` if they differ from DYMO M10 (`0x0922` / `0x8003`; the DYMO M25 is `0x8004`).
 3. `test_scale.py` prints 10 readings. Put a known item on the scale and compare.
 4. Supported report format: 6-byte HID POS scale report (status, unit, exponent, weight). DYMO M5/M10/M25 use it. Grams, kg, oz and lb are converted to grams.
-5. DYMO scales switch off automatically after a few minutes. Disable auto-off if the model allows it. Otherwise the kiosk shows "Scale not responding" until someone presses the power button.
+5. Use **grams** mode on the scale for 1 g precision (ounce mode works but is coarser).
+6. DYMO scales switch off automatically after a few minutes. Disable auto-off if the model allows it. Otherwise the kiosk shows "Scale not responding" until someone presses the power button.
 
 ## 7. Starting AutoRefund
 
 | Command | What it does |
 |---|---|
-| `start-autorefund.bat` | starts the backend, builds the UI, serves it at <http://127.0.0.1:5173> and opens the browser |
+| `start-autorefund.bat` | starts the Core API, the kiosk agent, builds the UI, serves it at <http://127.0.0.1:5173> and opens the browser |
 | `start-autorefund.bat kiosk` | same, but in full-screen Microsoft Edge kiosk mode (Alt+F4 to exit) |
 | `start-autorefund.bat dev` | Vite dev server with hot reload (for development) |
-| `stop-autorefund.bat` | closes the backend and frontend windows |
+| `stop-autorefund.bat` | closes the Core API, kiosk agent and UI windows |
 
-Logs: `self_refund_backend\logs\autorefund.log` (rotated at 2 MB).
+Windows: *AutoRefund Backend*, *AutoRefund Kiosk Agent*, *AutoRefund Frontend*.
+Logs: `self_refund_backend\logs\autorefund.log` and `kiosk_agent\logs\kiosk-agent.log` (rotated at 2 MB).
+
+**Is the kiosk set up correctly?** Open <http://127.0.0.1:5100/api/kiosk/status>. `"state": "OK"` with your store and retailer means the agent's key works; `"mock": false` means real hardware.
 
 **Start automatically at logon (demo kiosk)**: press `Win+R`, type `shell:startup`, and put a shortcut to `start-autorefund.bat kiosk` in that folder.
 
-**Development without hardware**: set `HARDWARE_MODE=mock` in `.env`. The camera then returns a frame stamped **MOCK CAMERA**, and the scale returns `MOCK_SCALE_GRAMS`. The backend logs a warning, and `/api/hardware/status` reports `"mock": true`. Never process real refunds in mock mode.
+**Development without hardware**: set `HARDWARE_MODE=mock` in `kiosk_agent\.env`. The camera then returns a frame stamped **MOCK CAMERA**, and the scale returns `MOCK_SCALE_GRAMS`. The agent logs a warning, `/api/hardware/status` reports `"mock": true`, and the audit log records `hardware_mock`. Never process real refunds in mock mode.
 
 ## 8. Testing
 
-**Automated backend tests** use a real PostgreSQL database and mock hardware:
+**Core API tests** use a real PostgreSQL database. Kiosk requests go through a real kiosk agent with mock hardware, running in the same process (`tests/kiosk_harness.py`):
 
 ```bat
 cd self_refund_backend
@@ -255,9 +309,7 @@ set TEST_DATABASE_URL=postgresql://refund_user:YOUR_PASSWORD@localhost:5432/refu
 .venv\Scripts\python -m pytest
 ```
 
-Without `TEST_DATABASE_URL`, only the hardware unit tests run (scale packet decoding, camera and scale failure handling, barcode decoding).
-
-**Migration tests** need a *second* empty database (all its tables are dropped). They build a real Phase 0 database, upgrade it to the current version, use it through the app, then downgrade:
+**Migration tests** need a *second* empty database (all its tables are dropped). They build a real Phase 0 database, upgrade it, use it through the app, then downgrade:
 
 ```bat
 psql -U postgres -h localhost -c "CREATE DATABASE refund_migration_test OWNER refund_user"
@@ -265,27 +317,37 @@ set MIGRATION_TEST_DATABASE_URL=postgresql://refund_user:YOUR_PASSWORD@localhost
 .venv\Scripts\python -m pytest
 ```
 
-Without it, `test_migrations.py` is skipped.
+Without them, the database tests are skipped.
 
-Covered scenarios (94 tests):
+**Kiosk agent tests** need no database (a fake Core API and mock devices):
+
+```bat
+cd kiosk_agent
+.venv\Scripts\python -m pytest
+```
+
+Covered scenarios (Core API 126 tests, kiosk agent 41 tests):
 
 - normal return → approved, with a photo; tolerance boundary; weight mismatch → pending review
-- weight read by the backend; a weight or kiosk id sent by the browser is ignored; empty/unstable scale refused; scale disconnected → no refund
+- weight read by the kiosk agent; weight, kiosk, store or retailer values sent by the browser are ignored; empty/unstable scale refused; scale disconnected → no refund
 - duplicate return blocked and logged; product not on the receipt
 - quantity > 1 (partial returns, amount and expected weight scale, over-return blocked, invalid quantities)
 - pending review blocks resubmission; retry after rejection within the limit; limit reached is logged
 - return window enforced and configurable
-- idempotency: retry returns the same refund, key reuse for another item refused
-- **parallel submissions** (real PostgreSQL row locks): 5 simultaneous submissions → exactly 1 refund
-- photos: forged/expired/re-used capture ids not accepted; no photo → employee review
+- idempotency: retry returns the same return, key reuse for another item refused
+- **parallel submissions** (real PostgreSQL row locks): 5 simultaneous submissions → exactly 1 return
+- photos: expired/re-used capture ids not accepted; no photo → employee review; stored evidence is byte-identical to the photo the customer saw
 - receipt lookup does not expose customer email or payment method
 - staff endpoints and evidence images require login; forged, expired and logged-out tokens refused; login rate limit
 - approve/reject record the employee, reason and audit entry; illegal state changes → 409
 - `approved → refunded` requires a POS reference and cannot happen before approval
 - camera failure → 503 with a friendly message; scale failure → 503; camera receipt scan; log date filter
-- **tenancy**: retailer → group → store → kiosk links; unknown or disabled kiosk/store/retailer refused; database refuses cross-retailer kiosks, groups, receipt lines, identifiers and returns; barcodes and receipt numbers unique per retailer only; one primary identifier per product
-- **cross-tenant isolation**: the same barcode and receipt number resolve to each retailer's own data; another retailer's ids are "not found"; duplicate rules and idempotency keys don't leak across retailers; staff can't list, decide on or view evidence of another retailer's returns; store-limited staff only see their store
+- **tenancy** and **cross-tenant isolation** (retailer/store/kiosk links, database-level refusal of cross-retailer data, per-retailer barcodes and receipts, staff scope)
 - **migrations**: Phase 0 data survives the upgrade, the app works on it, downgrade restores it, unsafe downgrade refused
+- **device authentication**: missing, wrong, expired and revoked keys refused; staff tokens are not kiosk keys; the key alone decides the kiosk (impersonation attempts ignored); disabled kiosk refused; development mode refuses a non-loopback host; keys stored hashed
+- **agent ↔ Core API boundary**: Core API no longer serves browser kiosk or hardware routes; returns carry the device key, not browser headers; Core API validates scale readings and JPEG evidence, stores nothing for blocked returns
+- **failure safety**: Core API down, timeout, 5xx or garbage → "nothing has been refunded", no return, outbox `unconfirmed`; retry with the same key creates exactly one return, including when the first response was lost; reconciliation never re-sends
+- **kiosk agent**: identity mismatch / disabled / not configured block everything; other web origins refused; loopback only; captures single use and expiring; local store holds no customer data; settings import never copies secrets
 
 **Frontend**
 
@@ -297,42 +359,37 @@ npm run lint
 
 `npm run lint` still reports the issues the original prototype already had (mostly `react-hooks/purity` for the `Math.random()` background particles). The build works.
 
-**Manual hardware test checklist**: follow [`docs/phase0-hardware-test-checklist.md`](docs/phase0-hardware-test-checklist.md) on the kiosk PC and record the results in it.
+**Manual hardware test checklist**: follow [`docs/phase0-hardware-test-checklist.md`](docs/phase0-hardware-test-checklist.md) on the kiosk PC. Since Phase 2, hardware settings are in `kiosk_agent\.env`.
 
 ## 9. Known limitations
 
-- **Customer endpoints trust the local network.** Staff endpoints are authenticated, but the kiosk endpoints (receipt lookup, scale, camera, submit) are open to anything that can reach the API. Keep `FLASK_HOST=127.0.0.1`. Device authentication arrives with the kiosk agent (Phase 2).
-- **No receipt lookup rate limit.** Receipt numbers could be guessed by a local script. Planned with the cloud API (WAF + per-kiosk limits).
+- **Development kiosk keys are not production security.** A bearer key in a plain `.env` file over localhost HTTP, with no enrollment, rotation or hardware binding. It is refused unless the Core API runs on `127.0.0.1`. Production enrollment comes with the cloud API.
+- **HTTP between the agent and the Core API** (same PC). HTTPS comes when the Core API moves off the kiosk.
+- **The kiosk agent's local endpoints are unauthenticated** on `127.0.0.1`. Only pages from the kiosk UI origin may POST to it, but any program running on the PC could call it. It still cannot create returns without the Core API's rules.
+- **A blocked return still weighs and photographs the item.** The agent measures before the Core API checks eligibility; the Core API stores no evidence for blocked returns and the agent deletes its local photo.
+- **No receipt lookup rate limit.** Planned with the cloud API (WAF + per-kiosk limits).
 - **Staff roles are not differentiated yet.** All three roles may review returns; the `@require_staff(...)` decorator is ready for narrower rules.
-- **Kiosk identity is configuration.** `KIOSK_ID` picks the store and retailer; anyone who can edit `.env` could point a kiosk at another store. Secure kiosk enrollment is Phase 2.
 - **One return policy for all retailers** (from `.env`). The code asks `policy_for(retailer)`, so per-retailer policies can be added without changing the rules.
 - **Usernames are unique across all retailers**, so login needs no retailer field.
-- **Login rate limit is in memory** (per backend process) and resets when the backend restarts.
-- **Customer flow state is still in `localStorage`** (receipt and selected item, no personal data). It moves into the kiosk agent session in Phase 2.
+- **Login rate limit is in memory** (per Core API process) and resets when it restarts.
+- **Customer screens still keep display data in `localStorage`** (receipt items and selection, no personal data). The agent tracks the session (receipt number, timestamps).
 - **No payment integration.** `approved` means verified; staff record the POS refund with *Mark refunded at POS*.
-- **Development server.** The backend uses Flask's built-in server, which is fine for a single kiosk demo. For production, use a WSGI server such as `waitress`.
-- **Dates.** Refund times are stored in UTC without a timezone marker, so the logs page may show them offset from local time.
+- **Development servers.** Both Flask programs use the built-in server, fine for a single kiosk demo. For production, use a WSGI server such as `waitress`.
+- **Dates.** Return times are stored in UTC without a timezone marker, so the logs page may show them offset from local time.
 - **Weight is the only automatic check.** Photos are stored as evidence, but no computer-vision check is done yet.
 - **Camera scanning of Code-128 receipts** needs pyzbar and the VC++ 2013 runtime.
-- **Unsupported scales.** Only USB HID POS scales are supported. Serial/RS-232 scales would need a new `ScaleDevice` implementation in `hardware/`.
-- **Scale buffering.** If a scale sends reports only when the weight changes, the last value is reused until a new report arrives.
-- **Tested on Linux only so far.** The Windows `.bat` scripts and the real camera and scale code have **not been run on Windows or with the physical devices yet**. See the table below.
+- **Unsupported scales.** Only USB HID POS scales are supported. Serial/RS-232 scales would need a new `ScaleDevice` implementation in `kiosk_agent\hardware\`.
 
-### Test status of this migration
+### Verification status
 
 | Area | Status | How |
 |---|---|---|
-| Backend API and business rules (51 workflow/security/rule tests, after Phase 0) | PASS | pytest against PostgreSQL 16 on Linux, mock hardware |
-| Scale report decoding, error handling, camera-absent handling, barcode decoding (12 tests) | PASS | pytest (no devices) |
-| Alembic migrations + `create_database.sql` + seed | PASS | fresh PostgreSQL 16 database |
+| Core API rules, tenancy, device auth, agent boundary, migrations (126 tests) | PASS | pytest, PostgreSQL 16, Linux (Phase 1: 94 also passed on Windows) |
+| Kiosk agent (41 tests) | PASS | pytest, Linux, no database |
+| Separate Core API + kiosk agent processes, including Core API outage and retry | PASS | Linux, mock hardware |
 | Frontend production build | PASS | `vite build` |
-| Customer + employee flow in a real browser (HID-style keystroke scan, approve, pending, duplicate, scale-offline message) | MOCKED | Playwright + Chromium, mock camera/scale |
-| All Python packages have Windows x64 wheels (Python 3.12/3.13) | PASS | `pip download --platform win_amd64` |
-| `.bat` scripts on Windows | NOT TESTED | needs a Windows PC |
-| USB webcam through DirectShow/MSMF | NOT TESTED | needs physical hardware on Windows |
-| DYMO scale through hidapi on Windows | NOT TESTED | needs physical hardware |
-| Handheld USB barcode scanner | NOT TESTED | needs physical hardware (keyboard input was simulated in the browser) |
-| pyzbar DLL loading on Windows | NOT TESTED | needs Windows |
+| Webcam, DYMO M10, pyzbar, `setup` / `init-database` / `start` scripts before Phase 2 | PASS | Windows kiosk PC (Phase 0/1) |
+| Phase 2 on the Windows kiosk PC (updated scripts, agent with real webcam/DYMO/scanner, full flows) | NOT YET TESTED | needs the kiosk PC |
 
 ## 10. Raspberry Pi → Windows migration notes
 
