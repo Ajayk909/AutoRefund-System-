@@ -23,4 +23,4 @@ def _domain_error(err):
     return jsonify(err.body()), err.status
 
 
-from app.api import hardware, kiosk, staff  # noqa: E402,F401  (register routes)
+from app.api import hardware, kiosk, kiosk_device, staff  # noqa: E402,F401  (register routes)

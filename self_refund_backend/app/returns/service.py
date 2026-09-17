@@ -1,12 +1,13 @@
 """
 Submit a customer return.
 
-Security model (unchanged from Phase 0):
-* the weight is read from the scale HERE, never taken from the request
+Security model:
+* the weight comes from the trusted kiosk boundary (the kiosk agent, which
+  owns the scale), never from the customer's browser
 * the kiosk identity comes from configuration, never from the request, and
   every lookup is limited to that kiosk's retailer
-* the photo must be one this backend captured recently (capture id);
-  otherwise the backend takes the photo itself
+* the photo comes from the kiosk boundary; its bytes are validated and stored
+  under a name generated here
 * the receipt line is locked while quantity is checked, so parallel
   submissions cannot return the same unit twice
 * an idempotency key makes a retried submission return the same return
@@ -20,7 +21,6 @@ from sqlalchemy.exc import IntegrityError
 from app import db
 from app.audit import service as audit
 from app.catalog import repository as catalog
-from app.evidence import captures
 from app.ids import parse_uuid
 from app.models import Refund
 from app.receipts import repository as receipts
@@ -28,7 +28,6 @@ from app.returns import repository, rules
 from app.returns.rules import ReturnError
 from app.returns.states import PENDING_REVIEW, QUANTITY_CONSUMING
 from app.timeutil import utcnow
-from hardware import HardwareError
 
 log = logging.getLogger("autorefund.returns")
 
@@ -46,6 +45,21 @@ class ReturnRequest:
 
 
 @dataclass
+class ScaleMeasurement:
+    """A scale reading supplied by the trusted kiosk boundary."""
+    weight_grams: object
+    stable: bool
+    device: str = "unknown"
+    mock: bool = False
+
+
+@dataclass
+class Photo:
+    relative_path: str
+    sha256: str = None
+
+
+@dataclass
 class ReturnResult:
     refund: Refund
     product: object
@@ -54,8 +68,18 @@ class ReturnResult:
     replay: bool = False
 
 
-def submit_return(req, *, kiosk, policy, scale, camera, capture_dir):
+def submit_return(req, *, kiosk, policy, read_scale, obtain_photo, discard_photo,
+                  camera_mock=False, require_idempotency_key=False):
+    """Create a return.
+
+    ``read_scale()`` -> ScaleMeasurement (may raise ReturnError)
+    ``obtain_photo()`` -> Photo or None; ``discard_photo(photo)`` undoes it
+    Both are called only after the cheap eligibility checks pass, so a blocked
+    return never stores evidence.
+    """
     key = (req.idempotency_key or "").strip()
+    if require_idempotency_key and not key:
+        raise ReturnError("IDEMPOTENCY_KEY_REQUIRED", "Invalid request. Please try again.")
     if key and not rules.IDEMPOTENCY_KEY_RE.match(key):
         raise ReturnError("INVALID_IDEMPOTENCY_KEY", "Invalid request. Please try again.")
 
@@ -79,29 +103,35 @@ def submit_return(req, *, kiosk, policy, scale, camera, capture_dir):
     # It is repeated under the row lock below, which is what makes it safe.
     _check_line_available(transaction, line, product, quantity, kiosk, policy)
 
-    # --- hardware (before taking any database lock) --------------------------
+    # --- measurements from the kiosk boundary (before any database lock) ------
+    reading = read_scale()
     try:
-        reading = scale.read_live()
-    except HardwareError as exc:
-        log.warning("Scale unavailable during refund submission: %s", exc)
-        raise ReturnError("SCALE_UNAVAILABLE",
-                          "The scale isn't responding. Please ask an employee for help.", 503)
-    measured = Decimal(str(reading.weight_grams))
-    if not reading.stable or measured <= 0:
+        measured = Decimal(str(reading.weight_grams))
+        valid = measured.is_finite()
+    except (ArithmeticError, ValueError, TypeError):
+        valid = False
+    if not valid or not reading.stable or measured <= 0:
         raise ReturnError("SCALE_NOT_READY",
                           "Place your item on the scale and keep it still, then try again.", 409,
-                          measured_weight_grams=float(measured), stable=bool(reading.stable))
+                          measured_weight_grams=float(measured) if valid else None,
+                          stable=bool(reading.stable))
 
-    image_path = captures.resolve_capture(req.capture_id, capture_dir,
-                                          policy.capture_max_age_seconds)
-    if req.capture_id and not image_path:
-        log.warning("Capture id not usable (unknown, expired or already used); recapturing")
-    if not image_path:
-        try:
-            image_path = captures.take_photo(camera, capture_dir)["relative_path"]
-        except Exception as exc:  # camera errors must not crash the return
-            log.warning("Camera capture failed during refund submission: %s", exc)
-            image_path = None
+    photo = obtain_photo()
+    try:
+        result = _create(req, kiosk, policy, transaction, product, line, quantity, key,
+                         reading, measured, photo, camera_mock)
+    except Exception:
+        if photo:
+            discard_photo(photo)
+        raise
+    if result.replay and photo:  # a parallel request with the same key won
+        discard_photo(photo)
+    return result
+
+
+def _create(req, kiosk, policy, transaction, product, line, quantity, key, reading, measured,
+            photo, camera_mock):
+    image_path = photo.relative_path if photo else None
 
     # --- lock the receipt line and apply the rules ---------------------------
     receipts.lock_line(line)
@@ -134,6 +164,7 @@ def submit_return(req, *, kiosk, policy, scale, camera, capture_dir):
         decision_status=decision_status,
         decision_reason=decision_reason,
         image_path=image_path,
+        image_sha256=photo.sha256 if photo else None,
         staff_override=False,
         idempotency_key=key or None,
     )
@@ -155,8 +186,8 @@ def submit_return(req, *, kiosk, policy, scale, camera, capture_dir):
         quantity=quantity,
         expected_weight_grams=float(weight["expected"]),
         measured_weight_grams=float(measured),
-        weight_source=scale.name,
-        hardware_mock=bool(scale.is_mock or camera.is_mock),
+        weight_source=reading.device,
+        hardware_mock=bool(reading.mock or camera_mock),
         weight_match=weight["match"],
         decision_status=decision_status,
         decision_reason=decision_reason,

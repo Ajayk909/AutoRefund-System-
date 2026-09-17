@@ -90,3 +90,24 @@ class Kiosk(db.Model):
                                 ["stores.retailer_id", "stores.store_id"],
                                 name="fk_kiosks_store_same_retailer"),
     )
+
+
+class KioskCredential(db.Model):
+    """A credential the kiosk agent uses to authenticate to the Core API.
+
+    Phase 2 only issues ``development`` keys: random, stored as a SHA-256
+    hash, bound to one kiosk, expiring, revocable, and only accepted while the
+    Core API runs on a loopback address. Later phases add credential types
+    such as device key pairs with short-lived tokens.
+    """
+    __tablename__ = "kiosk_credentials"
+
+    credential_id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    kiosk_id = db.Column(UUID(as_uuid=True), db.ForeignKey("kiosks.kiosk_id"), nullable=False,
+                         index=True)
+    credential_type = db.Column(db.String(30), nullable=False)
+    secret_hash = db.Column(db.String(64), nullable=False, unique=True)
+    created_at = db.Column(db.DateTime, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    last_used_at = db.Column(db.DateTime, nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True)

@@ -10,7 +10,9 @@ from app.receipts import service as receipts
 from app.returns import service as returns
 from app.returns.policy import policy_for
 from app.tenancy.context import current_kiosk
-from hardware import get_camera, get_scale
+from app.evidence import captures, storage
+from app.returns.rules import ReturnError
+from hardware import HardwareError, get_camera, get_scale
 
 log = logging.getLogger("autorefund.api")
 
@@ -59,13 +61,31 @@ def start_refund():
         idempotency_key=request.headers.get("Idempotency-Key") or data.get("idempotency_key") or "",
     )
     kiosk = current_kiosk()
+    policy = policy_for(cfg, kiosk.retailer_id)
+    scale, camera = get_scale(), get_camera()
+
+    def read_scale():
+        try:
+            r = scale.read_live()
+        except HardwareError as exc:
+            log.warning("Scale unavailable during refund submission: %s", exc)
+            raise ReturnError("SCALE_UNAVAILABLE",
+                              "The scale isn't responding. Please ask an employee for help.", 503)
+        return returns.ScaleMeasurement(r.weight_grams, r.stable, scale.name, scale.is_mock)
+
+    def obtain_photo():
+        path = captures.resolve_capture(req.capture_id, cfg["CAPTURE_DIR"],
+                                        cfg["CAPTURE_MAX_AGE_SECONDS"])
+        if not path:
+            try:
+                path = captures.take_photo(camera, cfg["CAPTURE_DIR"])["relative_path"]
+            except Exception as exc:  # camera errors must not crash the return
+                log.warning("Camera capture failed during refund submission: %s", exc)
+                return None
+        return returns.Photo(path)
+
     result = returns.submit_return(
-        req,
-        kiosk=kiosk,
-        policy=policy_for(cfg, kiosk.retailer_id),
-        scale=get_scale(),
-        camera=get_camera(),
-        capture_dir=cfg["CAPTURE_DIR"],
-    )
+        req, kiosk=kiosk, policy=policy, read_scale=read_scale, obtain_photo=obtain_photo,
+        discard_photo=lambda photo: None, camera_mock=camera.is_mock)
     status = 200 if result.replay else 201
     return jsonify({"success": True, "refund": return_result_to_dict(result)}), status

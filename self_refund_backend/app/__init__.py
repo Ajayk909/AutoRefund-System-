@@ -42,6 +42,9 @@ def create_app(config_overrides=None):
             "DATABASE_URL is not set. Copy self_refund_backend/.env.example "
             "to .env and fill in your PostgreSQL connection string.")
 
+    from app.tenancy.device_auth import check_startup_safety
+    check_startup_safety(app.config)
+
     _setup_logging(app)
 
     origins = app.config.get("CORS_ORIGINS", "*")

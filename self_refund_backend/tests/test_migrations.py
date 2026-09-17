@@ -170,4 +170,4 @@ def test_downgrade_refuses_when_data_needs_tenants(engine):
     result = alembic("downgrade", PHASE0_HEAD)
     assert result.returncode != 0
     assert "same receipt number exists at more than one retailer" in result.stderr
-    assert "d4a1b6c3e2f5" in alembic("current").stdout  # nothing was changed
+    assert "(head)" in alembic("current").stdout  # nothing was changed (still at head)

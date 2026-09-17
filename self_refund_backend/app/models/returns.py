@@ -35,6 +35,8 @@ class Refund(db.Model):
     measured_weight_grams = db.Column(db.Numeric(10, 2), nullable=False)
     weight_match = db.Column(db.Boolean, nullable=False)
     image_path = db.Column(db.String(500), nullable=True)
+    # SHA-256 of the evidence image as received from the kiosk agent (integrity).
+    image_sha256 = db.Column(db.String(64), nullable=True)
     decision_status = db.Column(decision_status_enum, nullable=False)
     decision_reason = db.Column(db.Text, nullable=True)
     staff_override = db.Column(db.Boolean, default=False)

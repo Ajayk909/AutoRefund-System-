@@ -62,6 +62,14 @@ class Config:
     # A kiosk photo must be used within this many seconds of being taken.
     CAPTURE_MAX_AGE_SECONDS = _int("CAPTURE_MAX_AGE_SECONDS", 900)
 
+    # --- Kiosk agent -> Core API ----------------------------------------------
+    # How kiosk agents authenticate. Only "development" exists in Phase 2 and
+    # it is refused unless FLASK_HOST is a loopback address.
+    DEVICE_AUTH_MODE = os.getenv("DEVICE_AUTH_MODE", "development").strip().lower()
+    DEV_KEY_MAX_DAYS = _int("DEV_KEY_MAX_DAYS", 30)
+    # Largest evidence photo the agent may upload (bytes).
+    MAX_EVIDENCE_BYTES = _int("MAX_EVIDENCE_BYTES", 5 * 1024 * 1024)
+
     # --- Staff authentication ----------------------------------------------
     STAFF_SESSION_HOURS = _int("STAFF_SESSION_HOURS", 8)
 
