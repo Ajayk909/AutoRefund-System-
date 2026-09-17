@@ -5,9 +5,10 @@ throughout: **Verified** (actually run/observed), **Implemented but not
 deployed** (code/config exists, correct on review, not exercised against
 real AWS), **Unable to verify** (not checked at all).
 
-Current stage: **3B in progress. Image built and pushed, migration run
-successfully. Stopped for approval before running seed (explicitly not run
-yet per instruction).**
+Current stage: **3B in progress. Seed run, ECS service deployed on the real
+image and healthy behind the ALB, HTTPS verified end-to-end. Stopped for
+approval before GitHub Actions workflows and the remaining verification
+items (ECS->RDS write, evidence upload, hardware).**
 
 **All 58 Terraform-managed AWS resources now exist** (ACM cert from step 1 +
 57 from the full apply, `0 changed, 0 destroyed`, no errors):
@@ -39,18 +40,50 @@ yet per instruction).**
   revisions applied in order, ending at `e5b9c0d7f3a1` (Phase 2, kiosk
   credentials) - matches `docs/architecture.md`'s migration table exactly.
   No secrets appeared in the logs.
-- **Seed has deliberately NOT been run yet** (per instruction) - the
-  database has schema only, no demo data, no admin user.
-- The ECS **service** is still running task definition revision 1
-  (`bootstrap` image) and is still unhealthy - expected, since the service
-  hasn't been redeployed with revision 2 yet. That's the next step after
-  seed.
+- A separate read-only one-off task (same image, command override, no code
+  change) confirmed the schema before seed: 14 tables
+  (`alembic_version, audit_logs, kiosk_credentials, kiosks,
+  product_identifiers, products, refunds, retailers, staff,
+  staff_sessions, store_groups, stores, transaction_items, transactions`),
+  Alembic version `e5b9c0d7f3a1` - matches head.
+
+**Seed - Verified:**
+- Ran as a one-off `aws ecs run-task` with `taskRoleArn` overridden to the
+  **one-off task role** (the default service task role only has evidence
+  bucket access, not Secrets Manager write) and command override
+  `python seed.py --yes`. **Exit code 0.**
+- Logs confirm demo data was created and the generated admin password was
+  stored in `autorefund/dev/admin-password` **without ever being printed**.
+  Confirmed independently with `aws secretsmanager describe-secret`
+  (metadata only, value never read): a new `AWSCURRENT` version exists,
+  replacing Terraform's `not-yet-set` placeholder (now `AWSPREVIOUS`).
+- The dev kiosk key secret (`autorefund/dev/kiosk/KIOSK-001`) is still the
+  Terraform placeholder - issuing that key is a Stage 3C task (kiosk ->
+  cloud config), not done here.
+
+**ECS deployment - Verified:**
+- `aws ecs update-service --task-definition autorefund-dev-core-api:2
+  --force-new-deployment`, then `aws ecs wait services-stable`. Result:
+  `runningCount=1/1`, deployment `rolloutState=COMPLETED` on revision 2 (the
+  real image, not `bootstrap`).
+- ALB target health: **`healthy`** (`aws elbv2 describe-target-health`).
+
+**HTTPS end-to-end - Verified:**
+- `api-dev.autorefundkiosk.online` CNAME already resolved to the ALB (added
+  by the user between steps).
+- `https://api-dev.autorefundkiosk.online/api/health` -> `200
+  {"status":"ok","message":"Backend is running"}`.
+- `http://api-dev.autorefundkiosk.online/api/health` -> `301 Moved
+  Permanently` -> `https://api-dev.autorefundkiosk.online:443/api/health`
+  (HTTP->HTTPS redirect confirmed).
 
 **Not done yet** (remaining Stage 3B steps, each needs separate approval):
-run the seed one-off task, update the ECS service to task definition
-revision 2 and confirm it goes healthy, add the second Namecheap CNAME
-(`api-dev` -> the ALB DNS
-name above), verify HTTPS end-to-end, add GitHub Actions workflows.
+issue the KIOSK-001 staging key (Stage 3C item, deferred), verify a real
+ECS->RDS *write* (e.g. staff login + review queue, not just schema read),
+verify an evidence upload lands in S3 and is viewable only through the
+staff endpoint, confirm CloudWatch logs contain no secrets across a normal
+request, add GitHub Actions workflows (PR tests + OIDC deploy on push to
+main), one real end-to-end GitHub Actions run.
 
 ---
 
