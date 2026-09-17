@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api, { captureUrl } from "../../services/api";
+import api, { errorMessage } from "../../services/api";
+import EvidenceImage from "../../components/EvidenceImage";
+import useStaffGuard from "../../hooks/useStaffGuard";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -23,6 +25,7 @@ function KioskShell() {
 
 function PendingRefundsPage() {
   const navigate = useNavigate();
+  useStaffGuard();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoad, setActionLoad] = useState("");
@@ -37,12 +40,14 @@ function PendingRefundsPage() {
 
   const handleApprove = async (id) => {
     try { setActionLoad(`${id}-a`); await api.post(`/refunds/${id}/approve`); await load(); }
-    catch { alert("Failed to approve."); } finally { setActionLoad(""); }
+    catch (err) { alert(errorMessage(err, "Failed to approve.")); await load(); } finally { setActionLoad(""); }
   };
 
   const handleReject = async (id) => {
-    try { setActionLoad(`${id}-r`); await api.post(`/refunds/${id}/reject`); await load(); }
-    catch { alert("Failed to reject."); } finally { setActionLoad(""); }
+    const reason = window.prompt("Reason for rejecting this return (shown in the audit log):", "");
+    if (reason === null) return;
+    try { setActionLoad(`${id}-r`); await api.post(`/refunds/${id}/reject`, { reason }); await load(); }
+    catch (err) { alert(errorMessage(err, "Failed to reject.")); await load(); } finally { setActionLoad(""); }
   };
 
   return (
@@ -94,11 +99,19 @@ function PendingRefundsPage() {
                     <div className="pr-field"><span className="pr-label">Amount</span><span className="pr-val pr-amount">${item.refund_amount}</span></div>
                     <div className="pr-field"><span className="pr-label">Date</span><span className="pr-val">{item.refund_date ? new Date(item.refund_date).toLocaleString() : "N/A"}</span></div>
                   </div>
-                  {item.image_path && (
+                  <div className="pr-card-body">
+                    <div className="pr-field"><span className="pr-label">Why flagged</span><span className="pr-val">{item.decision_reason || "—"}</span></div>
+                    <div className="pr-field"><span className="pr-label">Quantity</span><span className="pr-val pr-mono">{item.quantity}</span></div>
+                    <div className="pr-field"><span className="pr-label">Barcode</span><span className="pr-val pr-mono">{item.barcode || "—"}</span></div>
+                    <div className="pr-field"><span className="pr-label">Kiosk</span><span className="pr-val pr-mono">{item.kiosk_id}</span></div>
+                  </div>
+                  {item.image_url ? (
                     <div className="pr-image-preview">
                       <div className="pr-image-label">Captured Image</div>
-                      <img src={captureUrl(item.image_path)} alt="Captured item" className="pr-image-thumb" onError={e => { e.target.style.display = "none"; }} />
+                      <EvidenceImage url={item.image_url} className="pr-image-thumb" />
                     </div>
+                  ) : (
+                    <div className="pr-image-preview"><div className="pr-image-label">No photo was captured for this return</div></div>
                   )}
                   <div className="btn-row pr-actions">
                     <button className="ghost-btn" onClick={() => navigate("/employee/dashboard")}>← Dashboard</button>

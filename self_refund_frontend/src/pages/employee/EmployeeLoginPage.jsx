@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
 import api from "../../services/api";
+import { saveStaffSession } from "../../services/staffSession";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -32,9 +33,13 @@ function EmployeeLoginPage() {
     try {
       setLoading(true); setError("");
       const res = await api.post("/staff/login", { username: employeeId, password });
-      localStorage.setItem("staffUser", JSON.stringify(res.data.staff));
+      saveStaffSession(res.data.token, res.data.staff);
       navigate("/employee/dashboard");
-    } catch { setError("Invalid credentials. Please try again."); }
+    } catch (err) {
+      setError(err?.response?.status === 429
+        ? err.response.data.message
+        : "Invalid credentials. Please try again.");
+    }
     finally { setLoading(false); }
   };
 

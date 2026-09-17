@@ -48,7 +48,11 @@ class Config:
     PORT = _int("FLASK_PORT", 5000)
     DEBUG = _bool("FLASK_DEBUG", False)
     # Comma separated list of allowed frontend origins, "*" allows all.
-    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS",
+                             "http://localhost:5173,http://127.0.0.1:5173")
+
+    # --- Staff authentication ----------------------------------------------
+    STAFF_SESSION_HOURS = _int("STAFF_SESSION_HOURS", 8)
 
     # --- Kiosk --------------------------------------------------------------
     KIOSK_ID = os.getenv("KIOSK_ID", "KIOSK-001")

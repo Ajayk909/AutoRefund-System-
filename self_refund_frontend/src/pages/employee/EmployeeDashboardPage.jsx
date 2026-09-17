@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
+import useStaffGuard from "../../hooks/useStaffGuard";
+import api from "../../services/api";
+import { clearStaffSession } from "../../services/staffSession";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -21,7 +24,12 @@ function KioskShell() {
 
 function EmployeeDashboardPage() {
   const navigate = useNavigate();
-  const staff = JSON.parse(localStorage.getItem("staffUser") || "{}");
+  const staff = useStaffGuard();
+  const signOut = async () => {
+    try { await api.post("/staff/logout"); } catch { /* session may already be gone */ }
+    clearStaffSession();
+    navigate("/employee/login");
+  };
 
   return (
     <PageWrapper>
@@ -31,12 +39,12 @@ function EmployeeDashboardPage() {
           <div className="ed-top-row">
             <div className="kiosk-hero ed-hero" style={{ textAlign: "left", padding: "32px 0 24px" }}>
               <div className="kiosk-eyebrow">Employee Dashboard</div>
-              <h1 className="page-title">Welcome Back{staff.name ? `, ${staff.name}` : ""}</h1>
+              <h1 className="page-title">Welcome Back{staff.full_name ? `, ${staff.full_name}` : ""}</h1>
               <p className="page-subtitle">Jump into the refund tools below to manage the queue and review history.</p>
             </div>
             <div className="ed-top-actions">
               <button className="ghost-btn" onClick={() => navigate("/")}>🏠 Main Menu</button>
-              <button className="ghost-btn" onClick={() => { localStorage.removeItem("staffUser"); navigate("/employee/login"); }}>Sign Out →</button>
+              <button className="ghost-btn" onClick={signOut}>Sign Out →</button>
             </div>
           </div>
 

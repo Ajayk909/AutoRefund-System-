@@ -4,7 +4,7 @@ import logging
 import os
 import cv2
 
-from flask import Blueprint, current_app, jsonify, request, Response, send_from_directory
+from flask import Blueprint, current_app, g, jsonify, request, Response, send_from_directory
 from werkzeug.security import check_password_hash
 
 from app import db
@@ -16,6 +16,16 @@ from app.models import (
     AuditLog,
     Staff,
 )
+from app.auth import (
+    REVIEW_ROLES,
+    create_session,
+    current_session,
+    login_limiter,
+    parse_uuid,
+    require_staff,
+)
+from app.refund_states import APPROVED, REFUNDED, REJECTED, InvalidTransition, ensure_transition
+from app.timeutil import utcnow
 from hardware import HardwareError, get_camera, get_scale
 from hardware.barcode import backend_name as barcode_backend_name
 
@@ -489,9 +499,66 @@ def scan_receipt():
         }), 500
 
 
+def _refund_image_file(refund):
+    """Absolute path of a refund's evidence image, or None."""
+    normalized = normalize_capture_path(refund.image_path)
+    if not normalized:
+        return None
+    filename = os.path.basename(normalized)
+    path = os.path.join(capture_dir(), filename)
+    return path if os.path.isfile(path) else None
+
+
+def refund_to_staff_dict(refund):
+    product = db.session.get(Product, refund.product_id)
+    reviewer = db.session.get(Staff, refund.staff_id) if refund.staff_id else None
+    quantity = refund.quantity or 1
+    has_image = _refund_image_file(refund) is not None
+    return {
+        "refund_id": str(refund.refund_id),
+        "item_name": product.name if product else "Unknown Item",
+        "barcode": product.barcode if product else None,
+        "decision_status": refund.decision_status,
+        "refund_date": refund.refund_date.isoformat() if refund.refund_date else None,
+        "quantity": quantity,
+        "measured_weight_grams": float(refund.measured_weight_grams),
+        "expected_weight_grams": (float(product.expected_weight_grams) * quantity
+                                  if product else None),
+        "weight_match": refund.weight_match,
+        "refund_amount": float(refund.refund_amount),
+        "decision_reason": refund.decision_reason,
+        "kiosk_id": refund.kiosk_id,
+        "reviewed_by": reviewer.full_name if reviewer else None,
+        "decided_at": refund.decided_at.isoformat() if refund.decided_at else None,
+        "payment_reference": refund.payment_reference,
+        "refunded_at": refund.refunded_at.isoformat() if refund.refunded_at else None,
+        "has_image": has_image,
+        # Authenticated URL: the browser must send the staff bearer token.
+        "image_url": f"/api/refunds/{refund.refund_id}/image" if has_image else None,
+    }
+
+
 @api_bp.get("/captures/<path:filename>")
+@require_staff()
 def get_capture_file(filename):
-    return send_from_directory(capture_dir(), filename)
+    return send_from_directory(capture_dir(), os.path.basename(filename))
+
+
+@api_bp.get("/refunds/<refund_id>/image")
+@require_staff()
+def get_refund_image(refund_id):
+    uid = parse_uuid(refund_id)
+    refund = db.session.get(Refund, uid) if uid else None
+    path = _refund_image_file(refund) if refund else None
+    if not path:
+        return jsonify({"success": False, "message": "Image not found"}), 404
+    db.session.add(AuditLog(event_type="evidence_viewed", refund_id=refund.refund_id,
+                            staff_id=g.staff.staff_id,
+                            details={"timestamp": utcnow().isoformat()}))
+    db.session.commit()
+    response = send_from_directory(capture_dir(), os.path.basename(path))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @api_bp.post("/staff/login")
@@ -506,16 +573,37 @@ def staff_login():
             "message": "username and password are required"
         }), 400
 
+    if login_limiter.is_blocked(username):
+        log.warning("Staff login temporarily locked for username=%s", username)
+        return jsonify({
+            "success": False,
+            "code": "TOO_MANY_ATTEMPTS",
+            "message": "Too many failed attempts. Please wait a few minutes and try again."
+        }), 429
+
     staff = Staff.query.filter_by(username=username).first()
     if not staff or not check_password_hash(staff.password_hash, password):
+        login_limiter.record_failure(username)
         log.warning("Failed staff login for username=%s", username)
+        db.session.add(AuditLog(event_type="staff_login_failed", details={
+            "username": str(username)[:100], "timestamp": utcnow().isoformat()}))
+        db.session.commit()
         return jsonify({
             "success": False,
             "message": "Invalid credentials"
         }), 401
 
+    login_limiter.reset(username)
+    token, session = create_session(staff)
+    db.session.add(AuditLog(event_type="staff_login", staff_id=staff.staff_id,
+                            details={"timestamp": utcnow().isoformat()}))
+    db.session.commit()
+    log.info("Staff login: %s", staff.username)
+
     return jsonify({
         "success": True,
+        "token": token,
+        "expires_at": session.expires_at.isoformat(),
         "staff": {
             "staff_id": str(staff.staff_id),
             "username": staff.username,
@@ -526,7 +614,29 @@ def staff_login():
     })
 
 
+@api_bp.post("/staff/logout")
+def staff_logout():
+    session = current_session()
+    if session:
+        session.revoked_at = utcnow()
+        db.session.add(AuditLog(event_type="staff_logout", staff_id=session.staff_id,
+                                details={"timestamp": utcnow().isoformat()}))
+        db.session.commit()
+    return jsonify({"success": True})
+
+
+@api_bp.get("/staff/me")
+@require_staff()
+def staff_me():
+    staff = g.staff
+    return jsonify({"success": True, "staff": {
+        "staff_id": str(staff.staff_id), "username": staff.username,
+        "full_name": staff.full_name, "role": staff.role, "email": staff.email,
+    }})
+
+
 @api_bp.get("/refunds/logs")
+@require_staff()
 def refund_logs():
     start_date = request.args.get("start_date")
     end_date = request.args.get("end_date")
@@ -555,32 +665,14 @@ def refund_logs():
             }), 400
 
     refunds = query.order_by(Refund.refund_date.desc()).all()
-
-    data = []
-    for refund in refunds:
-        product = Product.query.filter_by(product_id=refund.product_id).first()
-        image_path = normalize_capture_path(refund.image_path)
-
-        data.append({
-            "refund_id": str(refund.refund_id),
-            "item_name": product.name if product else "Unknown Item",
-            "decision_status": refund.decision_status,
-            "refund_date": refund.refund_date.isoformat() if refund.refund_date else None,
-            "measured_weight_grams": float(refund.measured_weight_grams),
-            "expected_weight_grams": float(product.expected_weight_grams) if product else None,
-            "refund_amount": float(refund.refund_amount),
-            "decision_reason": refund.decision_reason,
-            "image_path": image_path,
-            "image_url": f"/api/captures/{os.path.basename(image_path)}" if image_path else None
-        })
-
     return jsonify({
         "success": True,
-        "refunds": data
+        "refunds": [refund_to_staff_dict(r) for r in refunds]
     })
 
 
 @api_bp.get("/refunds/pending")
+@require_staff()
 def pending_refunds():
     refunds = (
         Refund.query
@@ -588,96 +680,92 @@ def pending_refunds():
         .order_by(Refund.refund_date.desc())
         .all()
     )
-
-    data = []
-    for refund in refunds:
-        product = Product.query.filter_by(product_id=refund.product_id).first()
-        image_path = normalize_capture_path(refund.image_path)
-
-        data.append({
-            "refund_id": str(refund.refund_id),
-            "item_name": product.name if product else "Unknown Item",
-            "decision_status": refund.decision_status,
-            "refund_date": refund.refund_date.isoformat() if refund.refund_date else None,
-            "measured_weight_grams": float(refund.measured_weight_grams),
-            "expected_weight_grams": float(product.expected_weight_grams) if product else None,
-            "refund_amount": float(refund.refund_amount),
-            "decision_reason": refund.decision_reason,
-            "image_path": image_path,
-            "image_url": f"/api/captures/{os.path.basename(image_path)}" if image_path else None
-        })
-
     return jsonify({
         "success": True,
-        "refunds": data
+        "refunds": [refund_to_staff_dict(r) for r in refunds]
     })
+
+
+_TRANSITION_EVENTS = {
+    APPROVED: "refund_approved_by_staff",
+    REJECTED: "refund_rejected_by_staff",
+    REFUNDED: "refund_marked_refunded",
+}
+_DEFAULT_REASONS = {
+    APPROVED: "Approved by staff review",
+    REJECTED: "Rejected by staff review",
+}
+
+
+def _staff_transition(refund_id, target):
+    """Apply a staff state change with a row lock and a full audit record."""
+    data = request.get_json(silent=True) or {}
+    uid = parse_uuid(refund_id)
+    refund = (Refund.query.filter_by(refund_id=uid).with_for_update().first()
+              if uid else None)
+    if not refund:
+        db.session.rollback()
+        return jsonify({"success": False, "message": "Refund not found"}), 404
+
+    previous = refund.decision_status
+    try:
+        ensure_transition(previous, target)
+    except InvalidTransition:
+        db.session.rollback()
+        log.warning("Illegal transition %s -> %s for refund %s by %s",
+                    previous, target, refund_id, g.staff.username)
+        return jsonify({
+            "success": False,
+            "code": "INVALID_STATE",
+            "message": f"This return is already {previous.replace('_', ' ')}.",
+            "decision_status": previous,
+        }), 409
+
+    reason = str(data.get("reason") or "").strip()[:500]
+    now = utcnow()
+    details = {"previous_status": previous, "new_status": target,
+               "timestamp": now.isoformat()}
+
+    if target == REFUNDED:
+        reference = str(data.get("payment_reference") or "").strip()[:255]
+        if not reference:
+            db.session.rollback()
+            return jsonify({"success": False, "code": "PAYMENT_REFERENCE_REQUIRED",
+                            "message": "Enter the POS refund reference."}), 400
+        refund.payment_reference = reference
+        refund.refunded_at = now
+        refund.refunded_by_staff_id = g.staff.staff_id
+        details["payment_reference"] = reference
+    else:
+        refund.decision_reason = reason or _DEFAULT_REASONS[target]
+        refund.staff_override = True
+        refund.staff_id = g.staff.staff_id
+        refund.decided_at = now
+        details["reason"] = refund.decision_reason
+
+    refund.decision_status = target
+    db.session.add(AuditLog(event_type=_TRANSITION_EVENTS[target], refund_id=refund.refund_id,
+                            staff_id=g.staff.staff_id, details=details))
+    db.session.commit()
+    log.info("Refund %s %s -> %s by %s", refund.refund_id, previous, target, g.staff.username)
+    return jsonify({"success": True, "message": f"Return {target.replace('_', ' ')}",
+                    "refund": refund_to_staff_dict(refund)})
 
 
 @api_bp.post("/refunds/<refund_id>/approve")
+@require_staff(*REVIEW_ROLES)
 def approve_refund(refund_id):
-    refund = Refund.query.filter_by(refund_id=refund_id).first()
-
-    if not refund:
-        return jsonify({
-            "success": False,
-            "message": "Refund not found"
-        }), 404
-
-    refund.decision_status = "approved"
-    refund.decision_reason = "Approved by staff review"
-    refund.staff_override = True
-
-    audit = AuditLog(
-        event_type="refund_approved_by_staff",
-        refund_id=refund.refund_id,
-        staff_id=None,
-        details={
-            "refund_id": str(refund.refund_id),
-            "decision_status": "approved",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-    db.session.add(audit)
-    db.session.commit()
-    log.info("Refund %s approved by staff", refund.refund_id)
-
-    return jsonify({
-        "success": True,
-        "message": "Refund approved successfully"
-    })
+    return _staff_transition(refund_id, APPROVED)
 
 
 @api_bp.post("/refunds/<refund_id>/reject")
+@require_staff(*REVIEW_ROLES)
 def reject_refund(refund_id):
-    refund = Refund.query.filter_by(refund_id=refund_id).first()
+    return _staff_transition(refund_id, REJECTED)
 
-    if not refund:
-        return jsonify({
-            "success": False,
-            "message": "Refund not found"
-        }), 404
 
-    refund.decision_status = "rejected"
-    refund.decision_reason = "Rejected by staff review"
-    refund.staff_override = True
-
-    audit = AuditLog(
-        event_type="refund_rejected_by_staff",
-        refund_id=refund.refund_id,
-        staff_id=None,
-        details={
-            "refund_id": str(refund.refund_id),
-            "decision_status": "rejected",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-    db.session.add(audit)
-    db.session.commit()
-    log.info("Refund %s rejected by staff", refund.refund_id)
-
-    return jsonify({
-        "success": True,
-        "message": "Refund rejected successfully"
-    })
+@api_bp.post("/refunds/<refund_id>/mark-refunded")
+@require_staff(*REVIEW_ROLES)
+def mark_refunded(refund_id):
+    """Record that the money was returned (e.g. refund issued at the POS)."""
+    return _staff_transition(refund_id, REFUNDED)

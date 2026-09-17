@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api, { captureUrl } from "../../services/api";
+import api, { errorMessage } from "../../services/api";
+import EvidenceImage from "../../components/EvidenceImage";
+import useStaffGuard from "../../hooks/useStaffGuard";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -25,11 +27,13 @@ const statusClass = (status) => {
   const lower = status.toLowerCase();
   if (lower === "approved") return "approved";
   if (lower === "rejected") return "rejected";
+  if (lower === "refunded") return "approved";
   return "pending";
 };
 
 function RefundLogsPage() {
   const navigate = useNavigate();
+  useStaffGuard();
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [startDate, setStart] = useState("");
@@ -55,7 +59,16 @@ function RefundLogsPage() {
   const handleClear = () => { setStart(""); setEnd(""); setTimeout(() => load("", ""), 0); };
 
   const approvedCount = logs.filter((log) => log.decision_status?.toLowerCase() === "approved").length;
-  const pendingCount = logs.filter((log) => log.decision_status?.toLowerCase() === "pending").length;
+  const pendingCount = logs.filter((log) => log.decision_status?.toLowerCase() === "pending_review").length;
+
+  // "Approved" does not move money. Staff issue the refund at the POS and
+  // record its reference here (approved -> refunded).
+  const markRefunded = async (id) => {
+    const reference = window.prompt("Enter the POS refund reference number:", "");
+    if (!reference) return;
+    try { await api.post(`/refunds/${id}/mark-refunded`, { payment_reference: reference }); await load(); }
+    catch (err) { alert(errorMessage(err, "Could not record the refund.")); }
+  };
 
   return (
     <PageWrapper>
@@ -118,7 +131,7 @@ function RefundLogsPage() {
                   <div key={log.refund_id}>
                     <div
                       className="table-row rl-table-row"
-                      style={{ cursor: log.image_path ? "pointer" : "default", animationDelay: `${i * 0.04}s` }}
+                      style={{ cursor: "pointer", animationDelay: `${i * 0.04}s` }}
                       onClick={() => setExpanded(expanded === log.refund_id ? null : log.refund_id)}
                     >
                       <div><strong>{log.item_name}</strong></div>
@@ -127,16 +140,21 @@ function RefundLogsPage() {
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ color: "#c9d8f0", fontSize: 13 }}>{log.refund_date ? new Date(log.refund_date).toLocaleString() : "N/A"}</span>
-                        {log.image_path && <span style={{ color: "#38bdf8", fontSize: 12 }}>{expanded === log.refund_id ? "▲ Hide" : "▼ Image"}</span>}
+                        <span style={{ color: "#38bdf8", fontSize: 12 }}>{expanded === log.refund_id ? "▲ Hide" : "▼ Details"}</span>
                       </div>
                     </div>
-                    {expanded === log.refund_id && log.image_path && (
+                    {expanded === log.refund_id && (
                       <div className="rl-image-expand">
-                        <img src={captureUrl(log.image_path)} alt="Captured item" className="rl-image-full" onError={e => { e.target.style.display = "none"; }} />
+                        {log.image_url ? <EvidenceImage url={log.image_url} className="rl-image-full" /> : <div style={{ color: "#6882a8" }}>No photo captured</div>}
                         <div className="rl-image-meta">
-                          <span>Path: {log.image_path}</span>
-                          <span>Amount: ${log.refund_amount}</span>
-                          <span>Weight: {log.measured_weight_grams} g</span>
+                          <span>Amount: ${log.refund_amount} (qty {log.quantity})</span>
+                          <span>Weight: {log.measured_weight_grams} g (expected {log.expected_weight_grams} g)</span>
+                          <span>Reason: {log.decision_reason || "—"}</span>
+                          {log.reviewed_by && <span>Reviewed by: {log.reviewed_by}</span>}
+                          {log.payment_reference && <span>POS refund ref: {log.payment_reference}</span>}
+                          {log.decision_status === "approved" && (
+                            <button className="primary-btn" style={{ width: "fit-content" }} onClick={(e) => { e.stopPropagation(); markRefunded(log.refund_id); }}>Mark refunded at POS</button>
+                          )}
                         </div>
                       </div>
                     )}

@@ -62,8 +62,10 @@ def test_normal_return_is_approved_with_image(client, app):
     assert refund["refund_amount"] == 2.99
     assert refund["image_path"] == cap["image_path"]
 
-    # evidence image is served back
-    img = client.get(cap["image_url"])
+    # evidence image is NOT public; staff can view it
+    assert client.get(cap["image_url"]).status_code == 401
+    from tests.conftest import login
+    img = client.get(cap["image_url"], headers=login(client))
     assert img.status_code == 200 and img.mimetype == "image/jpeg"
 
     # audit trail recorded
@@ -81,7 +83,7 @@ def test_weight_tolerance_boundaries(client):
     assert r.get_json()["refund"]["decision_status"] == "approved"
 
 
-def test_weight_mismatch_goes_to_review(client):
+def test_weight_mismatch_goes_to_review(client, staff_headers):
     tx = _transaction(client)
     r = _submit(client, tx, _item(tx, "222222"), 400)
     assert r.status_code == 201
@@ -89,7 +91,7 @@ def test_weight_mismatch_goes_to_review(client):
     assert refund["decision_status"] == "pending_review"
     assert refund["weight_match"] is False
 
-    pending = client.get("/api/refunds/pending").get_json()["refunds"]
+    pending = client.get("/api/refunds/pending", headers=staff_headers).get_json()["refunds"]
     assert [p["refund_id"] for p in pending] == [refund["refund_id"]]
 
 
@@ -132,25 +134,28 @@ def test_fake_image_path_is_not_stored(client):
     assert r.get_json()["refund"]["image_path"] is None
 
 
-def test_employee_approve_and_reject(client):
+def test_employee_approve_and_reject(client, staff_headers):
     tx = _transaction(client)
     a = _submit(client, tx, _item(tx, "111111"), 10).get_json()["refund"]
     b = _submit(client, tx, _item(tx, "222222"), 10).get_json()["refund"]
     assert a["decision_status"] == b["decision_status"] == "pending_review"
 
-    assert client.post(f"/api/refunds/{a['refund_id']}/approve").status_code == 200
-    assert client.post(f"/api/refunds/{b['refund_id']}/reject").status_code == 200
+    h = staff_headers
+    assert client.post(f"/api/refunds/{a['refund_id']}/approve", headers=h).status_code == 200
+    assert client.post(f"/api/refunds/{b['refund_id']}/reject", headers=h).status_code == 200
 
     statuses = {r["refund_id"]: r["decision_status"]
-                for r in client.get("/api/refunds/logs").get_json()["refunds"]}
+                for r in client.get("/api/refunds/logs", headers=h).get_json()["refunds"]}
     assert statuses == {a["refund_id"]: "approved", b["refund_id"]: "rejected"}
-    assert client.get("/api/refunds/pending").get_json()["refunds"] == []
+    assert client.get("/api/refunds/pending", headers=h).get_json()["refunds"] == []
     assert Refund.query.filter_by(refund_id=a["refund_id"]).first().staff_override is True
 
 
-def test_logs_date_filter_validation(client):
-    assert client.get("/api/refunds/logs?start_date=bad").status_code == 400
-    assert client.get("/api/refunds/logs?start_date=2020-01-01&end_date=2099-01-01").status_code == 200
+def test_logs_date_filter_validation(client, staff_headers):
+    h = staff_headers
+    assert client.get("/api/refunds/logs?start_date=bad", headers=h).status_code == 400
+    assert client.get("/api/refunds/logs?start_date=2020-01-01&end_date=2099-01-01",
+                      headers=h).status_code == 200
 
 
 def test_staff_login(client):

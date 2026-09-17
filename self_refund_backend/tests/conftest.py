@@ -91,4 +91,17 @@ def _seed():
 
 @pytest.fixture()
 def client(app):
+    from app.auth import login_limiter
+    login_limiter.reset()
     return app.test_client()
+
+
+def login(client, username="admin1", password="admin123"):
+    r = client.post("/api/staff/login", json={"username": username, "password": password})
+    assert r.status_code == 200, r.get_json()
+    return {"Authorization": f"Bearer {r.get_json()['token']}"}
+
+
+@pytest.fixture()
+def staff_headers(client):
+    return login(client)
