@@ -28,17 +28,20 @@ The first prototype (Sheridan College capstone, 2026) ran on a **Raspberry Pi**.
 **Customer flow** (touch screen)
 
 1. **Receipt**: scan the receipt barcode with the handheld scanner, hold it up to the camera, or type the number.
-2. **Select item**: the receipt's items are listed. Items that were already returned can't be selected.
-3. **Weigh and photo**: put the item on the scale. A live weight is shown next to the expected weight, and the camera takes a photo.
+2. **Select item**: the receipt's items are listed with how many can still be returned. Items already returned, waiting for review, or outside the return window (default 30 days) can't be selected, and the screen says why.
+3. **Weigh and photo**: put the item on the scale. A live weight is shown for guidance and the camera takes a photo. When the customer submits, **the backend reads the scale itself**; the browser never sends the weight.
 4. **Result**
-   - *Approved* when the weight is within the product's tolerance (for example ±10 %).
-   - *Pending review* when the weight is outside the tolerance. An employee then decides.
-   - A second return of the same item from the same receipt is **blocked** and logged.
+   - *Approved* when the weight is within the product's tolerance (for example ±10 %) **and** a photo was captured.
+   - *Pending review* when the weight is outside the tolerance or no photo could be taken. An employee then decides.
+   - Returning more units than were bought is **blocked** and logged. A rejected unit may be tried again once (configurable).
+   - *Approved* does not mean the money has moved: there is no payment integration yet.
 
-**Employee flow**: log in, then use the dashboard.
+**Employee flow**: log in (server-side session), then use the dashboard.
 
-- **Pending refunds**: see the photo plus expected and measured weight, then approve or reject.
-- **Refund logs**: full history, filterable by date.
+- **Pending refunds**: see why the return was flagged, the photo, and expected vs measured weight, then approve or reject (with a reason). The employee's name is recorded.
+- **Refund logs**: full history, filterable by date. For an approved return, issue the refund at the POS and record its reference with **Mark refunded at POS** (`approved → refunded`).
+
+**Return states**: `pending_review → approved | rejected`, `approved → refunded`. Any other change is refused by the server.
 
 ## 2. Architecture
 
@@ -167,8 +170,13 @@ All backend settings live in `self_refund_backend/.env`. See `.env.example` for 
 | `DATABASE_URL` | – | `postgresql://refund_user:<password>@localhost:5432/refund_kiosk` |
 | `FLASK_HOST` / `FLASK_PORT` | `127.0.0.1` / `5000` | Use `0.0.0.0` only if other PCs must reach the API |
 | `FLASK_DEBUG` | `false` | Never `true` on a kiosk (the debugger allows remote code execution) |
-| `CORS_ORIGINS` | `*` | e.g. `http://localhost:5173,http://127.0.0.1:5173` |
-| `KIOSK_ID` | `KIOSK-001` | stored on every refund |
+| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | allowed frontend origins |
+| `KIOSK_ID` | `KIOSK-001` | stored on every refund; the browser cannot override it |
+| `RETURN_WINDOW_DAYS` | `30` | days after purchase a return is accepted |
+| `RETURN_RETRY_LIMIT_AFTER_REJECTION` | `1` | times a customer may try again after a rejection (`0` = never) |
+| `REQUIRE_PHOTO_FOR_AUTO_APPROVAL` | `true` | no photo → employee review |
+| `CAPTURE_MAX_AGE_SECONDS` | `900` | a kiosk photo must be used within this time |
+| `STAFF_SESSION_HOURS` | `8` | employee login lifetime |
 | `CAPTURE_DIR` / `LOG_DIR` | `captures` / `logs` | relative to `self_refund_backend\` or absolute (`D:\AutoRefund\captures`) |
 | `HARDWARE_MODE` | `real` | `real` or `mock` (simulated devices, **development only**) |
 | `CAMERA_MODE` / `SCALE_MODE` | = `HARDWARE_MODE` | override per device |
@@ -241,21 +249,22 @@ set TEST_DATABASE_URL=postgresql://refund_user:YOUR_PASSWORD@localhost:5432/refu
 
 Without `TEST_DATABASE_URL`, only the hardware unit tests run (scale packet decoding, camera and scale failure handling, barcode decoding).
 
-Covered scenarios:
+Covered scenarios (63 tests):
 
-- normal return → approved, with a photo
-- tolerance boundary
-- weight mismatch → pending review
-- duplicate return blocked and logged
-- product not on the receipt
-- invalid weight
-- fake image path not stored
-- employee approve and reject
-- staff login
-- camera failure → 503 with a friendly message
-- scale failure → 503
-- camera receipt scan
-- log date filter
+- normal return → approved, with a photo; tolerance boundary; weight mismatch → pending review
+- weight read by the backend; a weight or kiosk id sent by the browser is ignored; empty/unstable scale refused; scale disconnected → no refund
+- duplicate return blocked and logged; product not on the receipt
+- quantity > 1 (partial returns, amount and expected weight scale, over-return blocked, invalid quantities)
+- pending review blocks resubmission; retry after rejection within the limit; limit reached is logged
+- return window enforced and configurable
+- idempotency: retry returns the same refund, key reuse for another item refused
+- **parallel submissions** (real PostgreSQL row locks): 5 simultaneous submissions → exactly 1 refund
+- photos: forged/expired/re-used capture ids not accepted; no photo → employee review
+- receipt lookup does not expose customer email or payment method
+- staff endpoints and evidence images require login; forged, expired and logged-out tokens refused; login rate limit
+- approve/reject record the employee, reason and audit entry; illegal state changes → 409
+- `approved → refunded` requires a POS reference and cannot happen before approval
+- camera failure → 503 with a friendly message; scale failure → 503; camera receipt scan; log date filter
 
 **Frontend**
 
@@ -267,20 +276,16 @@ npm run lint
 
 `npm run lint` still reports the issues the original prototype already had (mostly `react-hooks/purity` for the `Math.random()` background particles). The build works.
 
-**Manual hardware test checklist** (run on the kiosk PC):
-
-- [ ] `check-hardware.bat`: camera photo saved, scale readings correct (compare with a known weight in g and in oz mode)
-- [ ] Scan `RCP-1001` with the handheld scanner, once with the text box focused and once after tapping elsewhere
-- [ ] Hold a printed receipt barcode in front of the camera (auto-scan)
-- [ ] Weigh screen: live stream visible, weight updates, *Capture Now* shows the photo
-- [ ] Submit a matching item → approved. Submit a wrong weight → pending. Try the same item again → blocked.
-- [ ] Employee: pending list shows the photo, approve/reject works, logs show the history
-- [ ] Unplug the camera or scale during use → friendly message. Plug it back in → it recovers.
+**Manual hardware test checklist**: follow [`docs/phase0-hardware-test-checklist.md`](docs/phase0-hardware-test-checklist.md) on the kiosk PC and record the results in it.
 
 ## 9. Known limitations
 
-- **Employee API endpoints are not authenticated on the server.** `/refunds/pending`, `/refunds/logs`, approve/reject and `/captures/*` can be called without logging in. The login only stores the staff user in the browser's `localStorage`, so hiding the pages is not real protection. The Pi prototype had the same problem. Add token or session authentication before any deployment outside a demo. Keep `FLASK_HOST=127.0.0.1` so only the kiosk PC can reach the API.
-- **Staff decisions are not linked to a staff member.** `staff_id` is `NULL` for the same reason.
+- **Customer endpoints trust the local network.** Staff endpoints are authenticated, but the kiosk endpoints (receipt lookup, scale, camera, submit) are open to anything that can reach the API. Keep `FLASK_HOST=127.0.0.1`. Device authentication arrives with the kiosk agent (Phase 2).
+- **No receipt lookup rate limit.** Receipt numbers could be guessed by a local script. Planned with the cloud API (WAF + per-kiosk limits).
+- **Staff roles are not differentiated yet.** All three roles may review returns; the `@require_staff(...)` decorator is ready for narrower rules.
+- **Login rate limit is in memory** (per backend process) and resets when the backend restarts.
+- **Customer flow state is still in `localStorage`** (receipt and selected item, no personal data). It moves into the kiosk agent session in Phase 2.
+- **No payment integration.** `approved` means verified; staff record the POS refund with *Mark refunded at POS*.
 - **Development server.** The backend uses Flask's built-in server, which is fine for a single kiosk demo. For production, use a WSGI server such as `waitress`.
 - **Dates.** Refund times are stored in UTC without a timezone marker, so the logs page may show them offset from local time.
 - **Weight is the only automatic check.** Photos are stored as evidence, but no computer-vision check is done yet.
@@ -293,7 +298,7 @@ npm run lint
 
 | Area | Status | How |
 |---|---|---|
-| Backend API and business rules (15 workflow tests) | PASS | pytest against PostgreSQL 16 on Linux, mock hardware |
+| Backend API and business rules (51 workflow/security/rule tests, after Phase 0) | PASS | pytest against PostgreSQL 16 on Linux, mock hardware |
 | Scale report decoding, error handling, camera-absent handling, barcode decoding (12 tests) | PASS | pytest (no devices) |
 | Alembic migrations + `create_database.sql` + seed | PASS | fresh PostgreSQL 16 database |
 | Frontend production build | PASS | `vite build` |

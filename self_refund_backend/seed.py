@@ -5,12 +5,13 @@ WARNING: this DELETES all existing products, receipts, refunds, staff and
 audit logs first. Run with --yes to skip the confirmation prompt.
 """
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from werkzeug.security import generate_password_hash
 
 from app import create_app, db
-from app.models import Product, Transaction, TransactionItem, Staff, Refund, AuditLog
+from app.models import (AuditLog, Product, Refund, Staff, StaffSession, Transaction,
+                        TransactionItem)
 
 
 if "--yes" not in sys.argv:
@@ -31,6 +32,7 @@ with app.app_context():
     TransactionItem.query.delete()
     Transaction.query.delete()
     Product.query.delete()
+    StaffSession.query.delete()
     Staff.query.delete()
 
     db.session.commit()
@@ -103,6 +105,39 @@ with app.app_context():
 
     db.session.add_all([item1, item2, item3])
 
+    # RCP-1002: quantity 3 of one product (quantity-aware returns)
+    product4 = Product(
+        barcode="444444",
+        name="Yogurt Cup",
+        category="Dairy",
+        expected_weight_grams=Decimal("100.00"),
+        weight_tolerance_percent=Decimal("10.00"),
+        price=Decimal("1.25"),
+    )
+    db.session.add(product4)
+    db.session.flush()
+    multi = Transaction(
+        receipt_number="RCP-1002",
+        purchase_date=datetime.utcnow(),
+        payment_method="Card",
+        total_amount=Decimal("3.75"),
+    )
+    # RCP-0900: bought 45 days ago, outside the default 30-day return window
+    old = Transaction(
+        receipt_number="RCP-0900",
+        purchase_date=datetime.utcnow() - timedelta(days=45),
+        payment_method="Cash",
+        total_amount=Decimal("2.99"),
+    )
+    db.session.add_all([multi, old])
+    db.session.flush()
+    db.session.add_all([
+        TransactionItem(transaction_id=multi.transaction_id, product_id=product4.product_id,
+                        quantity=3, price_at_purchase=Decimal("1.25")),
+        TransactionItem(transaction_id=old.transaction_id, product_id=product1.product_id,
+                        quantity=1, price_at_purchase=Decimal("2.99")),
+    ])
+
     print("Adding admin user...")
 
     admin = Staff(
@@ -117,4 +152,5 @@ with app.app_context():
     db.session.commit()
 
     print("\nSEED COMPLETE")
-    print("admin1 / admin123")
+    print("Receipts: RCP-1001 (3 items), RCP-1002 (Yogurt Cup x3), RCP-0900 (outside return window)")
+    print("admin1 / admin123  (demo only - change before any real use)")
