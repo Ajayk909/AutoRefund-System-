@@ -5,30 +5,29 @@ throughout: **Verified** (actually run/observed), **Implemented but not
 deployed** (code/config exists, correct on review, not exercised against
 real AWS), **Unable to verify** (not checked at all).
 
-Current stage: **3B in progress. Step 1 of the ALB/ACM sequence done,
-stopped waiting for the Namecheap DNS record to be added.**
+Current stage: **3B in progress. Step 1 of the ALB/ACM sequence
+(certificate validated). Stopped for approval before step 2 (the full
+apply).**
 
 **Real AWS resources now exist** (this is no longer plan-only):
-- ACM certificate requested for `api-dev.autorefundkiosk.online`:
+- ACM certificate for `api-dev.autorefundkiosk.online`:
   `arn:aws:acm:ca-central-1:<AWS_ACCOUNT_ID>:certificate/eb3082b8-152a-4dca-9d71-92d30a6e366d`,
-  status `PENDING_VALIDATION`. Created via
-  `terraform apply -target module.alb_https.aws_acm_certificate.this`
-  (only this one resource - `1 added, 0 changed, 0 destroyed`).
-- **Next step (blocked on you)**: add this CNAME at Namecheap, then this
-  session (or a new one) confirms the certificate reaches `ISSUED` via
-  `aws acm describe-certificate --certificate-arn
-  arn:aws:acm:ca-central-1:<AWS_ACCOUNT_ID>:certificate/eb3082b8-152a-4dca-9d71-92d30a6e366d
-  --query Certificate.Status`, then a normal full `terraform apply` creates
-  everything else (VPC, RDS, ECR, S3, ECS, ALB, GitHub OIDC, monitoring).
+  status **`ISSUED`** (verified with `aws acm describe-certificate`). Created
+  via `terraform apply -target module.alb_https.aws_acm_certificate.this`
+  (only this one resource - `1 added, 0 changed, 0 destroyed`). The
+  Namecheap validation CNAME
+  (`_4deb48f69c791dbeb066e86813f93121.api-dev` ->
+  `_f569680a31cadbbedeabd544e6f59cc4.wzccmgtwzk.acm-validations.aws`) has
+  been added and resolved.
+- **Next step (needs your explicit approval)**: a normal full
+  `terraform apply` (no `-target`) creates everything else - VPC, RDS, ECR,
+  S3, ECS, ALB, GitHub OIDC, monitoring, plus the
+  `aws_acm_certificate_validation` resource (should complete immediately
+  since the certificate is already `ISSUED`) and the HTTPS listener that
+  depends on it. After that, add the second Namecheap record: `api-dev` ->
+  the ALB's DNS name (from the apply's `alb_dns_name` output).
 
-  | Namecheap field | Value |
-  |---|---|
-  | Type | CNAME Record |
-  | Host | `_4deb48f69c791dbeb066e86813f93121.api-dev` |
-  | Value | `_f569680a31cadbbedeabd544e6f59cc4.wzccmgtwzk.acm-validations.aws` |
-  | TTL | Automatic |
-
-Nothing else has been created (no VPC/RDS/ECS/ALB/S3/ECR/etc.), no image
+Nothing else has been created yet (no VPC/RDS/ECS/ALB/S3/ECR/etc.), no image
 pushed, no migration/seed run, no GitHub Actions workflow added yet.
 
 ---
