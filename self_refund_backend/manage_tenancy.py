@@ -5,7 +5,7 @@ Manage retailers, stores and kiosks from the command line.
     python manage_tenancy.py add-retailer <CODE> "<Name>"
     python manage_tenancy.py add-store <RETAILER_CODE> <STORE_CODE> "<Name>"
     python manage_tenancy.py add-kiosk <RETAILER_CODE> <STORE_CODE> <KIOSK_CODE>
-    python manage_tenancy.py issue-dev-key <KIOSK_CODE> [--write-env <path to kiosk_agent\\.env>]
+    python manage_tenancy.py issue-dev-key <KIOSK_CODE> [--write-env <path to kiosk_agent\.env>]
     python manage_tenancy.py revoke-keys <KIOSK_CODE>
 
 issue-dev-key creates a DEVELOPMENT key for the kiosk agent (shown once, or

@@ -5,6 +5,7 @@ REM  AutoRefund - database initialisation (PostgreSQL on Windows)
 REM   1. optionally creates the refund_user login and refund_kiosk database
 REM   2. applies the Alembic migrations (creates / updates tables)
 REM   3. optionally loads the demo data (DELETES existing data)
+REM   4. optionally creates the kiosk agent's development key
 REM ==========================================================================
 set "ROOT=%~dp0"
 set "BACKEND=%ROOT%self_refund_backend"
@@ -39,11 +40,31 @@ echo.
 set "SEED="
 set /p SEED="Load DEMO data? This DELETES all existing refunds/receipts/products/staff [y/N]: "
 if /i "%SEED%"=="y" "%PYEXE%" seed.py
+
+echo.
+echo The kiosk agent needs a DEVELOPMENT key to talk to the Core API.
+set "MAKEKEY="
+set /p MAKEKEY="Create a kiosk agent key now and save it in kiosk_agent\.env? [Y/n]: "
+if /i not "%MAKEKEY%"=="n" call :make_key
 popd
 
 echo.
 echo Database ready.
 pause
+exit /b 0
+
+:make_key
+if not exist "%ROOT%kiosk_agent\.env" (
+    echo [WARNING] kiosk_agent\.env is missing - run setup-autorefund.bat, then this again.
+    exit /b 0
+)
+set "KIOSKCODE="
+set /p KIOSKCODE="Kiosk code [KIOSK-001]: "
+if "%KIOSKCODE%"=="" set "KIOSKCODE=KIOSK-001"
+"%PYEXE%" manage_tenancy.py issue-dev-key %KIOSKCODE% --write-env "%ROOT%kiosk_agent\.env"
+if errorlevel 1 (
+    echo [WARNING] Could not create the key. List kiosks with:  .venv\Scripts\python manage_tenancy.py list
+)
 exit /b 0
 
 :create_db

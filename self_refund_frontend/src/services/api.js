@@ -1,9 +1,9 @@
 import axios from "axios";
 import { clearStaffSession, getStaffToken } from "./staffSession";
 
-// Backend location. Override in self_refund_frontend/.env.local, e.g.
-//   VITE_API_ORIGIN=http://192.168.1.50:5000
-// Default: the Flask backend on the same Windows PC.
+// Core API location, used by the EMPLOYEE screens only (staff login, review,
+// evidence). Customer kiosk screens use services/agent.js instead.
+// Override in self_refund_frontend/.env.local:  VITE_API_ORIGIN=http://127.0.0.1:5000
 export const API_ORIGIN = (
   import.meta.env.VITE_API_ORIGIN || "http://127.0.0.1:5000"
 ).replace(/\/+$/, "");

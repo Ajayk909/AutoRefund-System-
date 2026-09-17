@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
+import agent from "../../services/agent";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -58,6 +59,7 @@ function RefundResultPage() {
     localStorage.removeItem("transactionData");
     localStorage.removeItem("selectedItem");
     localStorage.removeItem("refundResult");
+    agent.post("/session/end").catch(() => { /* the session also expires by itself */ });
     navigate("/");
   };
 

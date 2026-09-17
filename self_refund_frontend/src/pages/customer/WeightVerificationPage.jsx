@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api, { API_ORIGIN, errorMessage } from "../../services/api";
+import agent, { AGENT_ORIGIN, agentErrorMessage } from "../../services/agent";
 
 const newAttemptKey = () => (crypto.randomUUID ? crypto.randomUUID() : `k${Date.now()}${Math.random().toString(16).slice(2)}`);
 
@@ -28,7 +28,7 @@ function WeightVerificationPage() {
   const [weight, setWeight] = useState(0);
   const [stable, setStable] = useState(false);
   const [loading, setLoading] = useState(false);
-  const backendBase = API_ORIGIN;
+  const backendBase = AGENT_ORIGIN;
   const [scaleConnected, setScaleConnected] = useState(true);
   const [displayPreviewUrl, setDisplayPreviewUrl] = useState(`${backendBase}/api/camera/stream`);
   const [cameraLoading, setCameraLoading] = useState(false);
@@ -56,7 +56,7 @@ function WeightVerificationPage() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await api.get("/scale/live");
+        const res = await agent.get("/scale/live");
         setWeight(Number(res.data.weight_grams || 0));
         setStable(Boolean(res.data.stable));
         setScaleConnected(true);
@@ -69,7 +69,7 @@ function WeightVerificationPage() {
     if (captureInProgressRef.current) return null;
     try {
       captureInProgressRef.current = true; setCameraLoading(true); setCameraError("");
-      const res = await api.post("/camera/capture");
+      const res = await agent.post("/camera/capture");
       const data = res.data;
       if (data.success) {
         setCaptureId(data.capture_id); setCapturedImageName("Photo taken");
@@ -77,7 +77,7 @@ function WeightVerificationPage() {
         return data;
       }
       setCameraError(data.message || "Failed to capture image"); return null;
-    } catch (err) { setCameraError(errorMessage(err, "Camera unavailable. Please try again.")); return null; }
+    } catch (err) { setCameraError(agentErrorMessage(err, "Camera unavailable. Please try again.")); return null; }
     finally { captureInProgressRef.current = false; setCameraLoading(false); }
   };
 
@@ -88,17 +88,20 @@ function WeightVerificationPage() {
       setLoading(true);
       let finalCaptureId = captureId;
       if (!finalCaptureId) { const captured = await captureImage(); if (captured?.capture_id) finalCaptureId = captured.capture_id; }
-      // The weight shown on screen is for guidance only: the backend reads the
-      // scale itself when the return is submitted.
+      // The weight shown on screen is for guidance only: the kiosk agent reads
+      // the scale itself when the return is submitted.
       const payload = { transaction_id: transaction.transaction_id, item_id: item.item_id, product_id: item.product_id, quantity: 1, capture_id: finalCaptureId || undefined };
-      const res = await api.post("/refunds/start", payload, { headers: { "Idempotency-Key": attemptKeyRef.current } });
+      const res = await agent.post("/refunds/start", payload, { headers: { "Idempotency-Key": attemptKeyRef.current } });
       if (!res.data?.success) throw new Error(res.data?.message || "Refund request failed");
       localStorage.setItem("refundResult", JSON.stringify(res.data.refund));
       navigate("/customer/result");
     } catch (err) {
-      // No response = network problem: keep the same attempt key for the retry.
-      if (err?.response) attemptKeyRef.current = newAttemptKey();
-      alert(errorMessage(err, "We couldn't submit your return right now. Please try again."));
+      // Keep the same attempt key when the outcome is unknown (agent unreachable,
+      // or the returns service unavailable) so a retry can never create a
+      // second return. A definite answer (e.g. item already returned) gets a new key.
+      const outcomeUnknown = !err?.response || err.response.data?.code === "CORE_UNAVAILABLE";
+      if (!outcomeUnknown) attemptKeyRef.current = newAttemptKey();
+      alert(agentErrorMessage(err, "We couldn't submit your return right now. Nothing has been refunded. Please try again."));
     } finally { setLoading(false); }
   };
 

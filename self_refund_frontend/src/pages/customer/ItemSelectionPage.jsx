@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api from "../../services/api";
+import agent from "../../services/agent";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -45,7 +45,7 @@ function ItemSelectionPage() {
     const show = (data) => setTransaction({ ...data, items: Array.isArray(data.items) ? data.items : [] });
     show(parsed);
     // Refresh eligibility from the server (another return may have happened).
-    api.get(`/transactions/${encodeURIComponent(parsed.receipt_number)}`)
+    agent.get(`/transactions/${encodeURIComponent(parsed.receipt_number)}`)
       .then((res) => {
         localStorage.setItem("transactionData", JSON.stringify(res.data.transaction));
         show(res.data.transaction);

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api from "../../services/api";
+import agent, { agentErrorMessage } from "../../services/agent";
 import useBarcodeScanner from "../../hooks/useBarcodeScanner";
 
 function KioskShell({ mode = "Customer" }) {
@@ -45,15 +45,15 @@ function ReceiptScanPage() {
     if (!value) { setError("Please enter your receipt number first."); return; }
     try {
       setLoading(true); setError("");
-      const response = await api.get(`/transactions/${value}`);
+      const response = await agent.get(`/transactions/${encodeURIComponent(value)}`);
       localStorage.setItem("transactionData", JSON.stringify(response.data.transaction));
       navigate("/customer/items");
     } catch (err) {
       // 404 = unknown receipt. Other errors (e.g. this kiosk isn't set up)
       // carry a customer-safe message from the server.
-      setError(err?.response?.status === 404 || !err?.response?.data?.message
+      setError(err?.response?.status === 404
         ? "We couldn't find that receipt. Please check the number and try again."
-        : err.response.data.message);
+        : agentErrorMessage(err, "We couldn't find that receipt. Please check the number and try again."));
     } finally { setLoading(false); }
   };
 
@@ -61,7 +61,7 @@ function ReceiptScanPage() {
     if (!scanning) return;
     const interval = setInterval(async () => {
       try {
-        const res = await api.get("/receipt/scan");
+        const res = await agent.get("/receipt/scan");
         if (res.data?.success && res.data?.found && res.data?.barcode) {
           const scannedReceipt = String(res.data.barcode).trim();
           setReceiptNumber(scannedReceipt);
