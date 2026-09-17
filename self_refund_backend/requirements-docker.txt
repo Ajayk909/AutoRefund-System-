@@ -1,0 +1,5 @@
+# Extra dependencies for the container image only. Local Windows development
+# keeps using requirements.txt with the Flask dev server.
+-r requirements.txt
+gunicorn==23.0.0
+boto3==1.35.99
