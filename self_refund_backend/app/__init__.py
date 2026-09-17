@@ -51,7 +51,7 @@ def create_app(config_overrides=None):
 
     with app.app_context():
         from app import models  # noqa: F401
-        from app.routes import api_bp
+        from app.api import api_bp
         app.register_blueprint(api_bp, url_prefix="/api")
 
     return app

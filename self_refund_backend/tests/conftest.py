@@ -109,7 +109,7 @@ def _seed():
 
 @pytest.fixture()
 def client(app):
-    from app.auth import login_limiter
+    from app.identity.auth import login_limiter
     login_limiter.reset()
     return app.test_client()
 

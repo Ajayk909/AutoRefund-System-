@@ -5,6 +5,7 @@ Server-side staff authentication and authorization (Phase 0 foundation).
   ``staff_sessions``; sessions expire and can be revoked (logout).
 * ``@require_staff(...)`` protects a route. The frontend hiding a button is
   never treated as security.
+* Login itself (checking the password) lives in ``identity/service.py``.
 * A small in-memory limiter slows password guessing. It is per process,
   which is fine for a single kiosk PC; the cloud version will use WAF/Cognito.
 
@@ -14,7 +15,6 @@ role checks stay the same shape.
 import hashlib
 import secrets
 import threading
-import uuid
 from collections import defaultdict, deque
 from datetime import timedelta
 from functools import wraps
@@ -121,9 +121,3 @@ class LoginRateLimiter:
 
 login_limiter = LoginRateLimiter()
 
-
-def parse_uuid(value):
-    try:
-        return uuid.UUID(str(value))
-    except (ValueError, TypeError, AttributeError):
-        return None

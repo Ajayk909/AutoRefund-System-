@@ -4,7 +4,8 @@ import os
 import threading
 import time
 
-from app import db, returns
+from app import db
+from app.returns import rules
 from app.models import AuditLog, Refund
 from tests.conftest import login
 from tests.test_workflows import _capture, _item, _submit, _transaction
@@ -183,14 +184,14 @@ def test_invalid_idempotency_key(client):
 def _race(client, app, monkeypatch, submissions):
     """Fire submissions simultaneously; the rule check is slowed down so that
     without the row lock every request would pass it."""
-    original = returns.count_line_usage
+    original = rules.count_line_usage
 
     def slow(line):
         result = original(line)
         time.sleep(0.3)
         return result
 
-    monkeypatch.setattr(returns, "count_line_usage", slow)
+    monkeypatch.setattr(rules, "count_line_usage", slow)
     barrier = threading.Barrier(len(submissions))
     results = []
 
