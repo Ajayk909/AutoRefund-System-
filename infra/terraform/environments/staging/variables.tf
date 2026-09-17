@@ -1,6 +1,20 @@
 # PHASE 3: this environment is Terraform code + `terraform plan` only.
 # It is never applied. Safer, non-deletion-friendly defaults vs. dev.
 
+variable "apply_allowed" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Real safety gate, not just documentation: every module below is created
+    (count = 1) only when this is true. Leave it false. `terraform plan`
+    with the default shows 0 resources to add - that is the point.
+    If a later phase genuinely needs to apply staging, set
+    apply_allowed = true deliberately in terraform.tfvars, and first resolve
+    the github_oidc module's OIDC-provider collision with dev noted in
+    main.tf - do not just flip this flag.
+  EOT
+}
+
 variable "aws_region" {
   type    = string
   default = "ca-central-1"
