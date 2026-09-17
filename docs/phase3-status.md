@@ -5,10 +5,35 @@ throughout: **Verified** (actually run/observed), **Implemented but not
 deployed** (code/config exists, correct on review, not exercised against
 real AWS), **Unable to verify** (not checked at all).
 
-Current stage: **3B in progress. Seed run, ECS service deployed on the real
-image and healthy behind the ALB, HTTPS verified end-to-end. Stopped for
-approval before GitHub Actions workflows and the remaining verification
-items (ECS->RDS write, evidence upload, hardware).**
+Current stage: **3B in progress. ECS->RDS read+write verified over HTTPS,
+staff auth confirmed, CloudWatch logs confirmed clean, S3/RDS network
+posture reconfirmed against the live resources. Stopped for approval before
+GitHub Actions workflows.**
+
+**Staff auth / ECS->RDS read+write - Verified (over HTTPS, no secrets printed):**
+- Fetched the generated admin password from Secrets Manager into a local
+  PowerShell variable only (never echoed), logged in as `admin1` against
+  `https://api-dev.autorefundkiosk.online/api/staff/login` -> `200,
+  success=true, role=admin`. Login writes a `staff_sessions` row, so this
+  is a confirmed **write** through ECS to RDS, not just a read.
+- With the returned bearer token: `/api/refunds/pending` -> `200,
+  success=true, count=0`; `/api/refunds/logs` -> `200, success=true,
+  count=0`; `/api/staff/me` -> `200, success=true`. Counts are 0 because
+  seed only creates receipts/products, not refunds - expected, not a
+  failure. These are confirmed **reads** through ECS to RDS.
+- Unauthenticated requests to `/api/refunds/pending` and `/api/staff/me`,
+  and a request with a garbage bearer token, all returned **401**.
+- Checked CloudWatch logs for the exact task/timeframe of these requests:
+  only `Staff login: admin1` (username, an audit-style log line - no
+  password) and standard gunicorn access-log lines (method, path, status,
+  size, user-agent). No Authorization header values, no request bodies, no
+  passwords or tokens anywhere in the log stream.
+
+**Network posture reconfirmed against the live resources - Verified:**
+- `aws s3api get-public-access-block` on the evidence bucket: all four
+  settings (`BlockPublicAcls`, `IgnorePublicAcls`, `BlockPublicPolicy`,
+  `RestrictPublicBuckets`) are `true`.
+- `aws rds describe-db-instances`: `PubliclyAccessible: false`.
 
 **All 58 Terraform-managed AWS resources now exist** (ACM cert from step 1 +
 57 from the full apply, `0 changed, 0 destroyed`, no errors):
@@ -78,12 +103,11 @@ items (ECS->RDS write, evidence upload, hardware).**
   (HTTP->HTTPS redirect confirmed).
 
 **Not done yet** (remaining Stage 3B steps, each needs separate approval):
-issue the KIOSK-001 staging key (Stage 3C item, deferred), verify a real
-ECS->RDS *write* (e.g. staff login + review queue, not just schema read),
-verify an evidence upload lands in S3 and is viewable only through the
-staff endpoint, confirm CloudWatch logs contain no secrets across a normal
-request, add GitHub Actions workflows (PR tests + OIDC deploy on push to
-main), one real end-to-end GitHub Actions run.
+issue the KIOSK-001 staging key (Stage 3C item, deferred), verify an
+evidence upload lands in S3 and is viewable only through the staff
+endpoint (no demo return has been submitted yet, so nothing has touched
+the evidence bucket), add GitHub Actions workflows (PR tests + OIDC deploy
+on push to main), one real end-to-end GitHub Actions run.
 
 ---
 
