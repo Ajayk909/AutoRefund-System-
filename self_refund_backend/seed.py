@@ -7,8 +7,13 @@ stores and retailers first. Run with --yes to skip the confirmation prompt.
 The demo kiosk is KIOSK-001 (or the KIOSK_ID environment variable). Afterwards
 give the kiosk agent its development key:
     python manage_tenancy.py issue-dev-key KIOSK-001 --write-env ..\kiosk_agent\.env
+
+Outside local (ENVIRONMENT != local), the admin password is NOT admin123: a
+random password is generated and stored in the Secrets Manager secret named
+by SEED_ADMIN_SECRET_NAME (required in that case). It is never printed.
 """
 import os
+import secrets
 import sys
 
 from app import create_app, db
@@ -16,6 +21,7 @@ from app.models import (AuditLog, Kiosk, KioskCredential, Product, ProductIdenti
                         Retailer, Staff, StaffSession, Store, StoreGroup, Transaction,
                         TransactionItem)
 from app.tenancy import setup
+from cloud_secrets import store_secret
 
 if "--yes" not in sys.argv:
     answer = input(
@@ -63,13 +69,31 @@ with app.app_context():
     setup.create_receipt(store, "RCP-0900", [(coke, 1)], days_ago=45, payment_method="Cash")
 
     print("Adding admin user...")
-    setup.create_staff(retailer, "admin1", "admin123", "Demo Admin", role="admin",
+    environment = app.config.get("ENVIRONMENT", "local")
+    if environment == "local":
+        admin_password = "admin123"
+    else:
+        secret_name = os.getenv("SEED_ADMIN_SECRET_NAME")
+        if not secret_name:
+            print("SEED_ADMIN_SECRET_NAME must be set outside local so the generated "
+                 "admin password can be stored in Secrets Manager.")
+            sys.exit(1)
+        admin_password = secrets.token_urlsafe(18)
+    setup.create_staff(retailer, "admin1", admin_password, "Demo Admin", role="admin",
                        email="admin@test.com")
     db.session.commit()
 
     print("\nSEED COMPLETE")
     print("Receipts: RCP-1001 (3 items), RCP-1002 (Yogurt Cup x3), RCP-0900 (outside return window)")
-    print("admin1 / admin123  (demo only - change before any real use)")
+    if environment == "local":
+        print("admin1 / admin123  (demo only - change before any real use)")
+    else:
+        store_secret(secret_name, admin_password)
+        print(f"admin1 password stored in Secrets Manager secret {secret_name!r} (not printed).")
     print("\nOld kiosk agent keys were deleted. Give the agent a new one:")
-    print(f"python manage_tenancy.py issue-dev-key {kiosk_code} "
-          "--write-env ..\\kiosk_agent\\.env")
+    if environment == "local":
+        print(f"python manage_tenancy.py issue-dev-key {kiosk_code} "
+              "--write-env ..\\kiosk_agent\\.env")
+    else:
+        print(f"python manage_tenancy.py issue-staging-key {kiosk_code} "
+              "--secret-name <Secrets Manager secret name>")

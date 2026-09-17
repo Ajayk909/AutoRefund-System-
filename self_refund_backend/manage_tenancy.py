@@ -6,18 +6,25 @@ Manage retailers, stores and kiosks from the command line.
     python manage_tenancy.py add-store <RETAILER_CODE> <STORE_CODE> "<Name>"
     python manage_tenancy.py add-kiosk <RETAILER_CODE> <STORE_CODE> <KIOSK_CODE>
     python manage_tenancy.py issue-dev-key <KIOSK_CODE> [--write-env <path to kiosk_agent\.env>]
+    python manage_tenancy.py issue-staging-key <KIOSK_CODE> --secret-name <Secrets Manager secret> [--days N]
     python manage_tenancy.py revoke-keys <KIOSK_CODE>
 
 issue-dev-key creates a DEVELOPMENT key for the kiosk agent (shown once, or
 written to the agent's .env as KIOSK_DEV_KEY). Development keys only work
 while the Core API listens on 127.0.0.1 and expire after DEV_KEY_MAX_DAYS.
-Production kiosk enrollment replaces them in a later phase.
+
+issue-staging-key creates a cloud dev/staging key (DEVICE_AUTH_MODE=staging-key)
+and writes it straight into the given Secrets Manager secret; the value is
+never printed. It expires after STAGING_KEY_MAX_DAYS (default 14) unless
+--days gives a shorter lifetime. Production kiosk enrollment replaces both
+key types in a later phase.
 """
 import sys
 
 from app import create_app, db
 from app.models import Kiosk, Retailer, Store
 from app.tenancy import device_auth, repository, setup
+from cloud_secrets import store_secret
 
 
 def main(argv):
@@ -65,6 +72,24 @@ def main(argv):
             else:
                 print(f"Development key for {kiosk.code} (shown once, keep it private):")
                 print(key)
+            return 0
+        elif command == "issue-staging-key" and args:
+            kiosk = repository.get_kiosk_by_code(args[0])
+            if not kiosk:
+                print(f"Kiosk {args[0]} not found")
+                return 1
+            if "--secret-name" not in args or args.index("--secret-name") + 1 >= len(args):
+                print("issue-staging-key requires --secret-name <Secrets Manager secret name>")
+                return 1
+            secret_name = args[args.index("--secret-name") + 1]
+            days = None
+            if "--days" in args and args.index("--days") + 1 < len(args):
+                days = int(args[args.index("--days") + 1])
+            key = device_auth.issue_staging_key(kiosk, days=days)
+            db.session.commit()
+            store_secret(secret_name, key)
+            print(f"Staging key for {kiosk.code} stored in Secrets Manager secret "
+                 f"{secret_name!r} (value not printed).")
             return 0
         elif command == "revoke-keys" and args:
             kiosk = repository.get_kiosk_by_code(args[0])
