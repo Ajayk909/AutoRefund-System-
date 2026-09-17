@@ -1,23 +1,22 @@
 """
-Load the demo products / receipt / admin user.
+Load the demo retailer, store, kiosk, products, receipts and admin user.
 
-WARNING: this DELETES all existing products, receipts, refunds, staff and
-audit logs first. Run with --yes to skip the confirmation prompt.
+WARNING: this DELETES all existing returns, receipts, products, staff, kiosks,
+stores and retailers first. Run with --yes to skip the confirmation prompt.
+
+The demo kiosk uses KIOSK_ID from .env, so the kiosk works immediately.
 """
 import sys
-from datetime import datetime, timedelta
-from decimal import Decimal
-from werkzeug.security import generate_password_hash
 
 from app import create_app, db
-from app.models import (AuditLog, Product, Refund, Staff, StaffSession, Transaction,
-                        TransactionItem)
-
+from app.models import (AuditLog, Kiosk, Product, ProductIdentifier, Refund, Retailer, Staff,
+                        StaffSession, Store, StoreGroup, Transaction, TransactionItem)
+from app.tenancy import setup
 
 if "--yes" not in sys.argv:
     answer = input(
-        "This will DELETE all refunds, receipts, products, staff and audit "
-        "logs in the configured database.\nType YES to continue: ")
+        "This will DELETE all returns, receipts, products, staff, kiosks, stores and "
+        "retailers in the configured database.\nType YES to continue: ")
     if answer.strip() != "YES":
         print("Cancelled. Nothing was changed.")
         sys.exit(1)
@@ -26,129 +25,41 @@ app = create_app()
 
 with app.app_context():
     print("Clearing old demo/test data...")
-
-    AuditLog.query.delete()
-    Refund.query.delete()
-    TransactionItem.query.delete()
-    Transaction.query.delete()
-    Product.query.delete()
-    StaffSession.query.delete()
-    Staff.query.delete()
-
+    for model in (AuditLog, Refund, TransactionItem, Transaction, ProductIdentifier, Product,
+                  StaffSession, Staff, Kiosk, Store, StoreGroup, Retailer):
+        model.query.delete()
     db.session.commit()
 
-    print("Adding store products...")
+    kiosk_code = app.config["KIOSK_ID"]
+    print(f"Adding retailer DEMO -> Ontario -> STORE-001 -> kiosk {kiosk_code}...")
+    retailer = setup.create_retailer("DEMO", "Demo Retailer")
+    ontario = setup.create_group(retailer, "CA-ON", "Ontario", group_type="province")
+    store = setup.create_store(retailer, "STORE-001", "Demo Store", group=ontario,
+                               timezone="America/Toronto", country_code="CA",
+                               region_code="ON")
+    setup.create_kiosk(store, kiosk_code)
 
-    product1 = Product(
-        barcode="111111",
-        name="Coca Cola Can",
-        category="Beverage",
-        expected_weight_grams=Decimal("250.00"),
-        weight_tolerance_percent=Decimal("10.00"),
-        price=Decimal("2.99"),
-    )
-
-    product2 = Product(
-        barcode="222222",
-        name="Potato Chips",
-        category="Snacks",
-        expected_weight_grams=Decimal("150.00"),
-        weight_tolerance_percent=Decimal("10.00"),
-        price=Decimal("3.49"),
-    )
-
-    product3 = Product(
-        barcode="333333",
-        name="Chocolate Bar",
-        category="Candy",
-        expected_weight_grams=Decimal("50.00"),
-        weight_tolerance_percent=Decimal("10.00"),
-        price=Decimal("1.99"),
-    )
-
-    db.session.add_all([product1, product2, product3])
-    db.session.flush()
+    print("Adding products...")
+    coke = setup.create_product(retailer, "111111", "Coca Cola Can", 250, "2.99",
+                                category="Beverage")
+    chips = setup.create_product(retailer, "222222", "Potato Chips", 150, "3.49",
+                                 category="Snacks")
+    chocolate = setup.create_product(retailer, "333333", "Chocolate Bar", 50, "1.99",
+                                     category="Candy")
+    yogurt = setup.create_product(retailer, "444444", "Yogurt Cup", 100, "1.25",
+                                  category="Dairy")
 
     print("Adding receipts...")
-
-    transaction = Transaction(
-        receipt_number="RCP-1001",
-        customer_email="customer@test.com",
-        purchase_date=datetime.utcnow(),
-        payment_method="Card",
-        total_amount=Decimal("8.47"),
-    )
-
-    db.session.add(transaction)
-    db.session.flush()
-
-    item1 = TransactionItem(
-        transaction_id=transaction.transaction_id,
-        product_id=product1.product_id,
-        quantity=1,
-        price_at_purchase=Decimal("2.99"),
-    )
-
-    item2 = TransactionItem(
-        transaction_id=transaction.transaction_id,
-        product_id=product2.product_id,
-        quantity=1,
-        price_at_purchase=Decimal("3.49"),
-    )
-
-    item3 = TransactionItem(
-        transaction_id=transaction.transaction_id,
-        product_id=product3.product_id,
-        quantity=1,
-        price_at_purchase=Decimal("1.99"),
-    )
-
-    db.session.add_all([item1, item2, item3])
-
+    setup.create_receipt(store, "RCP-1001", [(coke, 1), (chips, 1), (chocolate, 1)],
+                         customer_email="customer@test.com")
     # RCP-1002: quantity 3 of one product (quantity-aware returns)
-    product4 = Product(
-        barcode="444444",
-        name="Yogurt Cup",
-        category="Dairy",
-        expected_weight_grams=Decimal("100.00"),
-        weight_tolerance_percent=Decimal("10.00"),
-        price=Decimal("1.25"),
-    )
-    db.session.add(product4)
-    db.session.flush()
-    multi = Transaction(
-        receipt_number="RCP-1002",
-        purchase_date=datetime.utcnow(),
-        payment_method="Card",
-        total_amount=Decimal("3.75"),
-    )
+    setup.create_receipt(store, "RCP-1002", [(yogurt, 3)])
     # RCP-0900: bought 45 days ago, outside the default 30-day return window
-    old = Transaction(
-        receipt_number="RCP-0900",
-        purchase_date=datetime.utcnow() - timedelta(days=45),
-        payment_method="Cash",
-        total_amount=Decimal("2.99"),
-    )
-    db.session.add_all([multi, old])
-    db.session.flush()
-    db.session.add_all([
-        TransactionItem(transaction_id=multi.transaction_id, product_id=product4.product_id,
-                        quantity=3, price_at_purchase=Decimal("1.25")),
-        TransactionItem(transaction_id=old.transaction_id, product_id=product1.product_id,
-                        quantity=1, price_at_purchase=Decimal("2.99")),
-    ])
+    setup.create_receipt(store, "RCP-0900", [(coke, 1)], days_ago=45, payment_method="Cash")
 
     print("Adding admin user...")
-
-    admin = Staff(
-        username="admin1",
-        password_hash=generate_password_hash("admin123"),
-        full_name="Demo Admin",
-        role="admin",
-        email="admin@test.com",
-    )
-
-    db.session.add(admin)
+    setup.create_staff(retailer, "admin1", "admin123", "Demo Admin", role="admin",
+                       email="admin@test.com")
     db.session.commit()
 
     print("\nSEED COMPLETE")

@@ -23,6 +23,18 @@ class Staff(db.Model):
     role = db.Column(staff_role_enum, nullable=False)
     email = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
+    # Staff work for one retailer. store_id NULL = every store of the
+    # retailer; set = only that store. (Many-to-many role assignments come
+    # with Cognito in Phase 4.) Usernames stay globally unique for login.
+    retailer_id = db.Column(UUID(as_uuid=True), db.ForeignKey("retailers.retailer_id"),
+                            nullable=False)
+    store_id = db.Column(UUID(as_uuid=True), nullable=True)
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(["retailer_id", "store_id"],
+                                ["stores.retailer_id", "stores.store_id"],
+                                name="fk_staff_store_same_retailer"),
+    )
 
 
 class StaffSession(db.Model):

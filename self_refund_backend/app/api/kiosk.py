@@ -9,6 +9,7 @@ from app.catalog import repository as catalog
 from app.receipts import service as receipts
 from app.returns import service as returns
 from app.returns.policy import policy_for
+from app.tenancy.context import current_kiosk
 from hardware import get_camera, get_scale
 
 log = logging.getLogger("autorefund.api")
@@ -24,7 +25,7 @@ def health():
 
 @api_bp.get("/products/lookup/<barcode>")
 def lookup_product(barcode):
-    product = catalog.find_by_barcode(barcode)
+    product = catalog.find_by_barcode(current_kiosk().retailer_id, barcode)
     if not product:
         return jsonify({"success": False, "message": "Product not found"}), 404
     return jsonify({"success": True, "product": product_to_dict(product)})
@@ -32,9 +33,10 @@ def lookup_product(barcode):
 
 @api_bp.get("/transactions/<receipt_number>")
 def get_transaction(receipt_number):
-    policy = policy_for(current_app.config)
+    kiosk = current_kiosk()
+    policy = policy_for(current_app.config, kiosk.retailer_id)
     return jsonify({"success": True,
-                    "transaction": receipts.lookup_receipt(receipt_number, policy)})
+                    "transaction": receipts.lookup_receipt(kiosk, receipt_number, policy)})
 
 
 @api_bp.post("/refunds/start")
@@ -56,10 +58,11 @@ def start_refund():
         capture_id=data.get("capture_id"),
         idempotency_key=request.headers.get("Idempotency-Key") or data.get("idempotency_key") or "",
     )
+    kiosk = current_kiosk()
     result = returns.submit_return(
         req,
-        kiosk_code=cfg["KIOSK_ID"],
-        policy=policy_for(cfg),
+        kiosk=kiosk,
+        policy=policy_for(cfg, kiosk.retailer_id),
         scale=get_scale(),
         camera=get_camera(),
         capture_dir=cfg["CAPTURE_DIR"],

@@ -5,13 +5,13 @@ from app.receipts import repository
 from app.returns import rules
 
 
-def lookup_receipt(receipt_number, policy):
+def lookup_receipt(kiosk, receipt_number, policy):
     """Receipt with per-line return eligibility.
 
     Deliberately excludes customer email and payment method: the kiosk only
     needs to show which items can be returned.
     """
-    transaction = repository.find_by_receipt_number(receipt_number)
+    transaction = repository.find_by_receipt_number(kiosk.retailer_id, receipt_number)
     if not transaction:
         raise DomainError("RECEIPT_NOT_FOUND", "Transaction not found", 404)
 

@@ -6,6 +6,7 @@ from app.audit import service as audit
 from app.errors import DomainError
 from app.ids import parse_uuid
 from app.returns import repository
+from app.tenancy.context import scope_for
 from app.returns.states import APPROVED, REFUNDED, REJECTED, InvalidTransition, ensure_transition
 from app.timeutil import utcnow
 
@@ -25,7 +26,9 @@ _DEFAULT_REASONS = {
 def apply_staff_decision(staff, refund_id, target, reason=None, payment_reference=None):
     """Change a return's status with a row lock and a full audit record."""
     uid = parse_uuid(refund_id)
-    refund = repository.get(uid, lock=True) if uid else None
+    # Another retailer's (or store's) return is "not found", never "forbidden",
+    # so its existence is not revealed.
+    refund = repository.get_for_staff(scope_for(staff), uid, lock=True) if uid else None
     if not refund:
         db.session.rollback()
         raise DomainError("NOT_FOUND", "Refund not found", 404)
@@ -61,7 +64,8 @@ def apply_staff_decision(staff, refund_id, target, reason=None, payment_referenc
         details["reason"] = refund.decision_reason
 
     refund.decision_status = target
-    audit.record(_EVENTS[target], refund_id=refund.refund_id, staff_id=staff.staff_id, **details)
+    audit.record(_EVENTS[target], refund_id=refund.refund_id, staff_id=staff.staff_id,
+                 retailer_id=refund.retailer_id, store_id=refund.store_id, **details)
     db.session.commit()
     log.info("Refund %s %s -> %s by %s", refund.refund_id, previous, target, staff.username)
     return refund

@@ -3,6 +3,7 @@ from app import db
 from app.catalog import repository as catalog
 from app.evidence import captures
 from app.models import Staff
+from app.tenancy import repository as tenancy
 
 
 def product_to_dict(product):
@@ -34,7 +35,7 @@ def return_result_to_dict(result):
 
 
 def refund_to_staff_dict(refund, capture_dir):
-    product = catalog.get(refund.product_id)
+    product = catalog.get(refund.retailer_id, refund.product_id)
     reviewer = db.session.get(Staff, refund.staff_id) if refund.staff_id else None
     quantity = refund.quantity or 1
     has_image = captures.evidence_file(refund.image_path, capture_dir) is not None
@@ -51,7 +52,9 @@ def refund_to_staff_dict(refund, capture_dir):
         "weight_match": refund.weight_match,
         "refund_amount": float(refund.refund_amount),
         "decision_reason": refund.decision_reason,
-        "kiosk_id": refund.kiosk_id,
+        "kiosk_id": str(refund.kiosk_id),
+        "kiosk_code": refund.kiosk_code,
+        "store_code": tenancy.store_code(refund.store_id),
         "reviewed_by": reviewer.full_name if reviewer else None,
         "decided_at": refund.decided_at.isoformat() if refund.decided_at else None,
         "payment_reference": refund.payment_reference,

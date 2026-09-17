@@ -3,7 +3,8 @@ Submit a customer return.
 
 Security model (unchanged from Phase 0):
 * the weight is read from the scale HERE, never taken from the request
-* the kiosk identity comes from configuration, never from the request
+* the kiosk identity comes from configuration, never from the request, and
+  every lookup is limited to that kiosk's retailer
 * the photo must be one this backend captured recently (capture id);
   otherwise the backend takes the photo itself
 * the receipt line is locked while quantity is checked, so parallel
@@ -53,12 +54,12 @@ class ReturnResult:
     replay: bool = False
 
 
-def submit_return(req, *, kiosk_code, policy, scale, camera, capture_dir):
+def submit_return(req, *, kiosk, policy, scale, camera, capture_dir):
     key = (req.idempotency_key or "").strip()
     if key and not rules.IDEMPOTENCY_KEY_RE.match(key):
         raise ReturnError("INVALID_IDEMPOTENCY_KEY", "Invalid request. Please try again.")
 
-    transaction, product, line = _resolve_line(req)
+    transaction, product, line = _resolve_line(kiosk, req)
 
     if key:
         existing = repository.find_by_idempotency_key(key)
@@ -76,7 +77,7 @@ def submit_return(req, *, kiosk_code, policy, scale, camera, capture_dir):
 
     # Cheap check first so blocked returns don't weigh or photograph anything.
     # It is repeated under the row lock below, which is what makes it safe.
-    _check_line_available(transaction, line, product, quantity, kiosk_code, policy)
+    _check_line_available(transaction, line, product, quantity, kiosk, policy)
 
     # --- hardware (before taking any database lock) --------------------------
     try:
@@ -111,7 +112,7 @@ def submit_return(req, *, kiosk_code, policy, scale, camera, capture_dir):
             db.session.rollback()
             return _replay(existing, line, product)
 
-    rejected = _check_line_available(transaction, line, product, quantity, kiosk_code, policy)
+    rejected = _check_line_available(transaction, line, product, quantity, kiosk, policy)
 
     weight = rules.weight_check(product, quantity, measured)
     decision_status, decision_reason = rules.decide(weight["match"], image_path is not None, policy)
@@ -122,7 +123,10 @@ def submit_return(req, *, kiosk_code, policy, scale, camera, capture_dir):
         product_id=product.product_id,
         transaction_item_id=line.item_id,
         quantity=quantity,
-        kiosk_id=kiosk_code,
+        retailer_id=kiosk.retailer_id,
+        store_id=kiosk.store_id,
+        kiosk_id=kiosk.kiosk_id,
+        kiosk_code=kiosk.kiosk_code,
         measured_weight_grams=measured,
         weight_match=weight["match"],
         refund_amount=line.price_at_purchase * quantity,
@@ -144,8 +148,10 @@ def submit_return(req, *, kiosk_code, policy, scale, camera, capture_dir):
         "refund_started",
         refund_id=refund.refund_id,
         receipt_number=transaction.receipt_number,
+        retailer_id=kiosk.retailer_id,
+        store_id=kiosk.store_id,
         barcode=catalog.primary_barcode(product),
-        kiosk_id=kiosk_code,
+        kiosk_id=kiosk.kiosk_code,
         quantity=quantity,
         expected_weight_grams=float(weight["expected"]),
         measured_weight_grams=float(measured),
@@ -165,20 +171,23 @@ def submit_return(req, *, kiosk_code, policy, scale, camera, capture_dir):
     return ReturnResult(refund, product, weight["expected"], image_path is not None)
 
 
-def _resolve_line(req):
+def _resolve_line(kiosk, req):
+    """Receipt, product and line - all from the kiosk's own retailer. IDs of
+    another retailer's data are simply "not found"."""
+    retailer_id = kiosk.retailer_id
     transaction = None
     if req.receipt_number:
-        transaction = receipts.find_by_receipt_number(req.receipt_number)
+        transaction = receipts.find_by_receipt_number(retailer_id, req.receipt_number)
     elif parse_uuid(req.transaction_id):
-        transaction = receipts.get(parse_uuid(req.transaction_id))
+        transaction = receipts.get(retailer_id, parse_uuid(req.transaction_id))
     if not transaction:
         raise ReturnError("RECEIPT_NOT_FOUND", "Transaction not found", 404)
 
     product = None
     if req.barcode:
-        product = catalog.find_by_barcode(req.barcode)
+        product = catalog.find_by_barcode(retailer_id, req.barcode)
     elif parse_uuid(req.product_id):
-        product = catalog.get(parse_uuid(req.product_id))
+        product = catalog.get(retailer_id, parse_uuid(req.product_id))
 
     line = None
     if parse_uuid(req.item_id):
@@ -186,7 +195,7 @@ def _resolve_line(req):
         if line and product and line.product_id != product.product_id:
             line = None
         if line and not product:
-            product = catalog.get(line.product_id)
+            product = catalog.get(retailer_id, line.product_id)
     if not product:
         raise ReturnError("PRODUCT_NOT_FOUND", "Product not found", 404)
     if not line:
@@ -208,7 +217,7 @@ def _parse_quantity(raw):
     return quantity
 
 
-def _check_line_available(transaction, line, product, quantity, kiosk_code, policy):
+def _check_line_available(transaction, line, product, quantity, kiosk, policy):
     """Quantity / duplicate / retry-limit rules. Returns rejected attempts."""
     used, rejected, refunds = rules.count_line_usage(line)
     remaining = line.quantity - used
@@ -219,7 +228,7 @@ def _check_line_available(transaction, line, product, quantity, kiosk_code, poli
             log.warning("Duplicate refund attempt blocked: receipt=%s product=%s existing=%s",
                         transaction.receipt_number, catalog.primary_barcode(product),
                         latest.refund_id)
-            _audit_blocked("duplicate_refund_blocked", transaction, product, kiosk_code,
+            _audit_blocked("duplicate_refund_blocked", transaction, product, kiosk,
                            refund_id=latest.refund_id,
                            existing_refund_status=latest.decision_status,
                            requested_quantity=quantity)
@@ -233,7 +242,7 @@ def _check_line_available(transaction, line, product, quantity, kiosk_code, poli
                           returnable_quantity=max(remaining, 0))
 
     if rejected > policy.retry_limit_after_rejection:
-        _audit_blocked("return_attempt_limit_reached", transaction, product, kiosk_code,
+        _audit_blocked("return_attempt_limit_reached", transaction, product, kiosk,
                        rejected_attempts=rejected,
                        retry_limit=policy.retry_limit_after_rejection)
         raise ReturnError("TOO_MANY_ATTEMPTS",
@@ -242,10 +251,11 @@ def _check_line_available(transaction, line, product, quantity, kiosk_code, poli
     return rejected
 
 
-def _audit_blocked(event_type, transaction, product, kiosk_code, refund_id=None, **details):
+def _audit_blocked(event_type, transaction, product, kiosk, refund_id=None, **details):
     audit.record(event_type, refund_id=refund_id,
+                 retailer_id=kiosk.retailer_id, store_id=kiosk.store_id,
                  receipt_number=transaction.receipt_number,
-                 barcode=catalog.primary_barcode(product), kiosk_id=kiosk_code, **details)
+                 barcode=catalog.primary_barcode(product), kiosk_id=kiosk.kiosk_code, **details)
     db.session.commit()
 
 

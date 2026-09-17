@@ -34,7 +34,7 @@ def login(username, password):
 
     login_limiter.reset(username)
     token, session = create_session(staff)
-    audit.record("staff_login", staff_id=staff.staff_id)
+    audit.record("staff_login", staff_id=staff.staff_id, retailer_id=staff.retailer_id)
     db.session.commit()
     log.info("Staff login: %s", staff.username)
     return staff, token, session
@@ -44,5 +44,7 @@ def logout():
     session = current_session()
     if session:
         session.revoked_at = utcnow()
-        audit.record("staff_logout", staff_id=session.staff_id)
+        staff = db.session.get(Staff, session.staff_id)
+        audit.record("staff_logout", staff_id=session.staff_id,
+                     retailer_id=staff.retailer_id if staff else None)
         db.session.commit()

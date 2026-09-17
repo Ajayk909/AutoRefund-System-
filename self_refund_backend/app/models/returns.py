@@ -23,7 +23,14 @@ class Refund(db.Model):
     refund_id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     transaction_id = db.Column(UUID(as_uuid=True), db.ForeignKey("transactions.transaction_id"), nullable=False)
     product_id = db.Column(UUID(as_uuid=True), db.ForeignKey("products.product_id"), nullable=False)
-    kiosk_id = db.Column(db.String(100), nullable=False)
+    # --- Tenancy (Phase 1) ---------------------------------------------------
+    retailer_id = db.Column(UUID(as_uuid=True), nullable=False)
+    # Store and kiosk where the return was made (may differ from the
+    # purchase store of the transaction, but always the same retailer).
+    store_id = db.Column(UUID(as_uuid=True), nullable=False)
+    kiosk_id = db.Column(UUID(as_uuid=True), nullable=False)
+    # KIOSK_ID text at the time of the return (kept for logs and history).
+    kiosk_code = db.Column(db.String(100), nullable=False)
     refund_date = db.Column(db.DateTime, server_default=db.func.now())
     measured_weight_grams = db.Column(db.Numeric(10, 2), nullable=False)
     weight_match = db.Column(db.Boolean, nullable=False)
@@ -51,4 +58,18 @@ class Refund(db.Model):
 
     __table_args__ = (
         db.CheckConstraint("quantity > 0", name="ck_refunds_quantity_positive"),
+        db.ForeignKeyConstraint(["retailer_id", "transaction_id"],
+                                ["transactions.retailer_id", "transactions.transaction_id"],
+                                name="fk_refunds_transaction_same_retailer"),
+        db.ForeignKeyConstraint(["retailer_id", "product_id"],
+                                ["products.retailer_id", "products.product_id"],
+                                name="fk_refunds_product_same_retailer"),
+        db.ForeignKeyConstraint(["retailer_id", "transaction_item_id"],
+                                ["transaction_items.retailer_id", "transaction_items.item_id"],
+                                name="fk_refunds_line_same_retailer"),
+        db.ForeignKeyConstraint(["retailer_id", "store_id", "kiosk_id"],
+                                ["kiosks.retailer_id", "kiosks.store_id", "kiosks.kiosk_id"],
+                                name="fk_refunds_kiosk_same_store"),
+        db.Index("ix_refunds_retailer_status_date", "retailer_id", "decision_status",
+                 "refund_date"),
     )

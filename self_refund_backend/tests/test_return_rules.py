@@ -37,7 +37,10 @@ def test_kiosk_id_comes_from_configuration(client, app):
     tx = _transaction(client)
     r = _submit(client, tx, _item(tx, "111111"), 250, kiosk_id="EVIL-KIOSK")
     refund = db.session.get(Refund, r.get_json()["refund"]["refund_id"])
-    assert refund.kiosk_id == app.config["KIOSK_ID"] != "EVIL-KIOSK"
+    # Phase 1: refunds.kiosk_id is now the kiosk's UUID; the text code moved to kiosk_code.
+    assert refund.kiosk_code == app.config["KIOSK_ID"] != "EVIL-KIOSK"
+    from app.models import Kiosk
+    assert db.session.get(Kiosk, refund.kiosk_id).code == app.config["KIOSK_ID"]
 
 
 def test_scale_disconnected_creates_no_refund(client, app):
