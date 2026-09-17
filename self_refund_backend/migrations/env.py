@@ -22,6 +22,13 @@ if config.config_file_name is not None:
 app = create_app()
 target_metadata = db.metadata
 
+# Use the same DATABASE_URL as the application (from .env) instead of a
+# hard-coded URL in alembic.ini. "%" must be escaped for configparser.
+config.set_main_option(
+    "sqlalchemy.url",
+    app.config["SQLALCHEMY_DATABASE_URI"].replace("%", "%%"),
+)
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")

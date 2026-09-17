@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api from "../../services/api";
+import api, { captureUrl } from "../../services/api";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -132,7 +132,7 @@ function RefundLogsPage() {
                     </div>
                     {expanded === log.refund_id && log.image_path && (
                       <div className="rl-image-expand">
-                        <img src={`http://localhost:5000/api/captures/${log.image_path.split("/").pop()}`} alt="Captured item" className="rl-image-full" onError={e => { e.target.style.display = "none"; }} />
+                        <img src={captureUrl(log.image_path)} alt="Captured item" className="rl-image-full" onError={e => { e.target.style.display = "none"; }} />
                         <div className="rl-image-meta">
                           <span>Path: {log.image_path}</span>
                           <span>Amount: ${log.refund_amount}</span>

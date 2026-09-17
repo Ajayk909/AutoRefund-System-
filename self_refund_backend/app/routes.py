@@ -1,9 +1,10 @@
 from decimal import Decimal
 from datetime import datetime
+import logging
 import os
 import cv2
 
-from flask import Blueprint, jsonify, request, Response, send_from_directory
+from flask import Blueprint, current_app, jsonify, request, Response, send_from_directory
 from werkzeug.security import check_password_hash
 
 from app import db
@@ -15,12 +16,26 @@ from app.models import (
     AuditLog,
     Staff,
 )
-from hardware.scale_service import get_weight_grams, get_live_weight_grams
-from app.usb_camera_service import USBCameraService, CAPTURE_DIR
+from hardware import HardwareError, get_camera, get_scale
+from hardware.barcode import backend_name as barcode_backend_name
 
 api_bp = Blueprint("api", __name__)
+log = logging.getLogger("autorefund.api")
 
-camera_service = USBCameraService("/dev/video0")
+
+def capture_dir():
+    return str(current_app.config["CAPTURE_DIR"])
+
+
+def existing_capture_path(image_path):
+    """Return the normalized captures/<file> path only if the file exists."""
+    normalized = normalize_capture_path(image_path)
+    if not normalized:
+        return None
+    filename = os.path.basename(normalized)
+    if os.path.isfile(os.path.join(capture_dir(), filename)):
+        return normalized
+    return None
 
 
 def product_to_dict(product):
@@ -133,8 +148,11 @@ def start_refund():
     product_id = data.get("product_id")
     item_id = data.get("item_id")
     measured_weight_grams = data.get("measured_weight_grams")
-    image_path = normalize_capture_path(data.get("image_path", "mock_images/test.jpg"))
-    kiosk_id = data.get("kiosk_id", "KIOSK-001")
+    requested_image_path = data.get("image_path")
+    image_path = existing_capture_path(requested_image_path)
+    if requested_image_path and not image_path:
+        log.warning("Refund submitted with missing image file: %s", requested_image_path)
+    kiosk_id = data.get("kiosk_id") or current_app.config["KIOSK_ID"]
 
     if measured_weight_grams is None:
         return jsonify({
@@ -193,13 +211,40 @@ def start_refund():
     ).first()
 
     if existing_refund:
+        log.warning(
+            "Duplicate refund attempt blocked: receipt=%s product=%s existing=%s",
+            transaction.receipt_number, product.barcode, existing_refund.refund_id)
+        db.session.add(AuditLog(
+            event_type="duplicate_refund_blocked",
+            refund_id=existing_refund.refund_id,
+            staff_id=None,
+            details={
+                "receipt_number": transaction.receipt_number,
+                "barcode": product.barcode,
+                "kiosk_id": kiosk_id,
+                "existing_refund_status": existing_refund.decision_status,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        ))
+        db.session.commit()
         return jsonify({
             "success": False,
             "message": "This item has already been submitted for refund.",
             "existing_refund_status": existing_refund.decision_status
         }), 400
 
-    measured = Decimal(str(measured_weight_grams))
+    try:
+        measured = Decimal(str(measured_weight_grams))
+    except Exception:
+        return jsonify({
+            "success": False,
+            "message": "measured_weight_grams must be a number"
+        }), 400
+    if not measured.is_finite() or measured < 0:
+        return jsonify({
+            "success": False,
+            "message": "measured_weight_grams must be a non-negative number"
+        }), 400
     expected = Decimal(str(product.expected_weight_grams))
     tolerance_percent = Decimal(str(product.weight_tolerance_percent))
 
@@ -245,12 +290,16 @@ def start_refund():
             "measured_weight_grams": float(measured),
             "weight_match": weight_match,
             "decision_status": decision_status,
+            "image_captured": image_path is not None,
             "timestamp": datetime.utcnow().isoformat()
         }
     )
 
     db.session.add(audit)
     db.session.commit()
+    log.info("Refund %s created: receipt=%s product=%s weight=%s expected=%s status=%s",
+             refund.refund_id, transaction.receipt_number, product.barcode,
+             measured, expected, decision_status)
 
     return jsonify({
         "success": True,
@@ -270,44 +319,64 @@ def start_refund():
 @api_bp.get("/scale/read")
 def read_scale():
     try:
-        weight = get_weight_grams()
+        reading = get_scale().read()
         return jsonify({
             "success": True,
-            "weight_grams": weight
+            "connected": True,
+            "weight_grams": reading.weight_grams,
+            "stable": reading.stable,
         })
-    except Exception as e:
+    except HardwareError as e:
+        log.warning("Scale read failed: %s", e)
         return jsonify({
             "success": False,
-            "message": str(e)
-        }), 500
+            "connected": False,
+            "weight_grams": 0,
+            "stable": False,
+            "message": "Scale unavailable"
+        }), 503
 
 
 @api_bp.get("/scale/live")
 def get_live_scale():
     try:
-        weight = get_live_weight_grams()
-        safe_weight = 0 if weight is None else float(weight)
-        stable = safe_weight > 0
-
+        reading = get_scale().read_live()
         return jsonify({
             "success": True,
-            "weight_grams": safe_weight,
-            "stable": stable,
+            "connected": True,
+            "weight_grams": float(reading.weight_grams or 0),
+            "stable": bool(reading.stable),
             "message": "Live weight fetched"
         })
-    except Exception as e:
+    except HardwareError as e:
+        log.warning("Live scale read failed: %s", e)
         return jsonify({
             "success": False,
-            "message": str(e),
+            "connected": False,
+            "message": "Scale unavailable",
             "weight_grams": 0,
             "stable": False
-        }), 500
+        }), 503
+
+
+@api_bp.get("/hardware/status")
+def hardware_status():
+    """Diagnostics for setup/testing (which devices are real or mocked)."""
+    camera = get_camera()
+    scale = get_scale()
+    return jsonify({
+        "success": True,
+        "camera": camera.status(),
+        "scale": scale.status(),
+        "barcode_decoder": barcode_backend_name(),
+        "keyboard_scanner": "handled by the kiosk UI (USB HID keyboard mode)",
+    })
 
 
 @api_bp.get("/camera/health")
 def camera_health():
     try:
-        if not camera_service.ensure_camera():
+        if not get_camera().ensure_camera():
             return jsonify({
                 "success": False,
                 "message": "USB camera could not be opened"
@@ -316,7 +385,7 @@ def camera_health():
         return jsonify({
             "success": True,
             "message": "USB camera is working",
-            "source": str(camera_service.current_source)
+            "source": str(get_camera().current_source)
         })
     except Exception as e:
         return jsonify({
@@ -328,7 +397,7 @@ def camera_health():
 @api_bp.get("/camera/preview")
 def camera_preview():
     try:
-        frame = camera_service.get_frame()
+        frame = get_camera().get_frame()
         if frame is None:
             return jsonify({
                 "success": False,
@@ -353,18 +422,18 @@ def camera_preview():
 @api_bp.get("/camera/stream")
 def camera_stream():
     try:
-        if not camera_service.ensure_camera():
+        if not get_camera().ensure_camera():
             return jsonify({
                 "success": False,
                 "message": "Could not open USB camera"
             }), 500
 
         return Response(
-            camera_service.generate_mjpeg_frames(),
+            get_camera().generate_mjpeg_frames(),
             mimetype="multipart/x-mixed-replace; boundary=frame"
         )
     except Exception as e:
-        print(f"/camera/stream failed: {e}")
+        log.exception("/camera/stream failed: %s", e)
         return jsonify({
             "success": False,
             "message": str(e)
@@ -374,10 +443,11 @@ def camera_stream():
 @api_bp.post("/camera/capture")
 def camera_capture():
     try:
-        result = camera_service.capture_image()
+        result = get_camera().capture_image()
         filename = result["filename"]
         image_path = result["relative_path"]
         image_url = f"/api/captures/{filename}"
+        log.info("Image captured: %s", image_path)
 
         return jsonify({
             "success": True,
@@ -387,17 +457,17 @@ def camera_capture():
             "image_url": image_url
         })
     except Exception as e:
-        print(f"/camera/capture failed: {e}")
+        log.error("/camera/capture failed: %s", e)
         return jsonify({
             "success": False,
-            "message": str(e)
-        }), 500
+            "message": "Camera unavailable. Please try again."
+        }), 503
 
 
 @api_bp.get("/receipt/scan")
 def scan_receipt():
     try:
-        result = camera_service.scan_barcode()
+        result = get_camera().scan_barcode()
 
         if result:
             return jsonify({
@@ -421,7 +491,7 @@ def scan_receipt():
 
 @api_bp.get("/captures/<path:filename>")
 def get_capture_file(filename):
-    return send_from_directory(CAPTURE_DIR, filename)
+    return send_from_directory(capture_dir(), filename)
 
 
 @api_bp.post("/staff/login")
@@ -437,13 +507,8 @@ def staff_login():
         }), 400
 
     staff = Staff.query.filter_by(username=username).first()
-    if not staff:
-        return jsonify({
-            "success": False,
-            "message": "Invalid credentials"
-        }), 401
-
-    if not check_password_hash(staff.password_hash, password):
+    if not staff or not check_password_hash(staff.password_hash, password):
+        log.warning("Failed staff login for username=%s", username)
         return jsonify({
             "success": False,
             "message": "Invalid credentials"
@@ -575,6 +640,7 @@ def approve_refund(refund_id):
 
     db.session.add(audit)
     db.session.commit()
+    log.info("Refund %s approved by staff", refund.refund_id)
 
     return jsonify({
         "success": True,
@@ -609,6 +675,7 @@ def reject_refund(refund_id):
 
     db.session.add(audit)
     db.session.commit()
+    log.info("Refund %s rejected by staff", refund.refund_id)
 
     return jsonify({
         "success": True,

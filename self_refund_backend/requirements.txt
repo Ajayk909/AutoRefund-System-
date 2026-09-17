@@ -1,3 +1,4 @@
+# AutoRefund backend - tested with Python 3.11-3.13 (Windows 10/11 x64, Linux)
 alembic==1.18.4
 blinker==1.9.0
 click==8.3.1
@@ -14,3 +15,11 @@ python-dotenv==1.2.2
 SQLAlchemy==2.0.48
 typing_extensions==4.15.0
 Werkzeug==3.1.6
+
+# Hardware (were installed manually on the Raspberry Pi, now pinned)
+# colorama: used by click for coloured console output on Windows
+colorama==0.4.6; sys_platform == "win32"
+opencv-python==4.14.0.94   # USB camera (DirectShow / Media Foundation on Windows)
+numpy>=1.26,<3
+pyzbar==0.1.9              # camera barcode decoding (needs VC++ 2013 x64 runtime on Windows)
+hidapi==0.15.0             # USB HID scale (DYMO)

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
 import api from "../../services/api";
+import useBarcodeScanner from "../../hooks/useBarcodeScanner";
 
 function KioskShell({ mode = "Customer" }) {
   const [time, setTime] = useState(new Date());
@@ -69,6 +70,15 @@ function ReceiptScanPage() {
     return () => clearInterval(interval);
   }, [scanning]);
 
+  // USB barcode scanner (HID keyboard mode) - works even without input focus
+  useBarcodeScanner((code) => {
+    if (loading) return;
+    setReceiptNumber(code);
+    setError("");
+    setScanMessage(`Receipt detected: ${code}`);
+    handleContinue(code);
+  });
+
   const hasInput = receiptNumber.trim().length > 0;
 
   return (
@@ -98,7 +108,7 @@ function ReceiptScanPage() {
               <div className="rsp-eyebrow">Step 1 of 3</div>
               <h1 className="rsp-title">Scan or enter your receipt</h1>
               <p className="rsp-subtitle">
-                Hold the receipt barcode in front of the camera scanner below, or type the receipt number manually on the right.
+                Scan the receipt barcode with the handheld scanner or hold it in front of the camera, or type the receipt number on the right.
               </p>
 
               {/* Barcode Scanner Animation */}
@@ -146,7 +156,7 @@ function ReceiptScanPage() {
               <div className="rsp-tips">
                 {[
                   { icon: "📋", text: "Find the receipt number at the top or bottom of your paper receipt" },
-                  { icon: "📷", text: "Hold the barcode flat and steady in front of the scanner" },
+                  { icon: "📷", text: "Aim the handheld scanner at the barcode, or hold it flat and steady in front of the camera" },
                   { icon: "💬", text: "Manual entry on the right always works if scanning doesn't" },
                 ].map((tip, i) => (
                   <div key={i} className="rsp-tip">

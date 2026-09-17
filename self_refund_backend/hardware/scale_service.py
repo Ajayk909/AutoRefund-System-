@@ -1,109 +1,195 @@
-import time
-import hid
+"""
+USB HID postal scale (DYMO M-series) implementation.
 
-VENDOR_ID = 0x0922
-PRODUCT_ID = 0x8003
+How the original Raspberry Pi prototype talked to the scale, and how it works
+on Windows:
 
-device = None
+* The DYMO scale is a standard USB HID "Point of Sale scale" device
+  (vendor 0x0922, product 0x8003 by default). It is NOT a keyboard and NOT a
+  serial/COM device, so no vendor driver is needed.
+* We use the cross-platform ``hidapi`` Python package (``import hid``). On the
+  Pi it used Linux hidraw; on Windows the same package uses the built-in
+  Windows HID API, so the code path is identical. No admin rights are needed.
+* Each input report is 6 bytes::
+
+      [0] report id (3)
+      [1] status   (2 = zero, 3 = in motion, 4 = stable weight,
+                    5 = under zero, 6 = over weight, 7/8 = needs calibration)
+      [2] unit     (2 = g, 3 = kg, 11 = oz, 12 = lb ...)
+      [3] exponent (signed byte, power of ten)
+      [4] weight low byte
+      [5] weight high byte
+
+The module-level ``get_weight_grams`` / ``get_live_weight_grams`` functions
+are kept for backwards compatibility with ``test_scale.py``.
+"""
+import logging
+import threading
+
+from .base import HardwareError, ScaleDevice, ScaleReading
+
+log = logging.getLogger("autorefund.hardware.scale")
+
+try:  # hidapi is optional so the backend can still start in mock mode
+    import hid  # type: ignore
+except Exception as exc:  # pragma: no cover - depends on the machine
+    hid = None
+    _HID_IMPORT_ERROR = exc
+else:
+    _HID_IMPORT_ERROR = None
 
 
-def connect_scale():
-    global device
+# HID POS "Weight Unit" usage values -> grams multiplier
+UNIT_TO_GRAMS = {
+    1: ("mg", 0.001),
+    2: ("g", 1.0),
+    3: ("kg", 1000.0),
+    11: ("oz", 28.3495),
+    12: ("lb", 453.592),
+}
 
-    try:
-        if device is not None:
+STATUS_ZERO = 2
+STATUS_IN_MOTION = 3
+STATUS_STABLE = 4
+STATUS_UNDER_ZERO = 5
+STATUS_OVER_WEIGHT = 6
+
+
+def decode_dymo_packet(data):
+    """Decode a 6-byte DYMO HID report into a ScaleReading.
+
+    Pure function so it can be unit-tested without hardware.
+    """
+    if not data or len(data) < 6:
+        raise HardwareError("Incomplete scale report")
+
+    status = data[1]
+    unit_code = data[2]
+    exponent = data[3]
+    raw_weight = data[4] + (data[5] << 8)
+
+    if exponent >= 128:  # unsigned byte -> signed int
+        exponent -= 256
+
+    value = raw_weight * (10 ** exponent)
+
+    unit_name, factor = UNIT_TO_GRAMS.get(unit_code, (None, None))
+    if factor is None:
+        # Same fallback as the Pi prototype: assume grams, but log it.
+        log.warning("Unknown scale unit code %s, assuming grams (data=%s)",
+                    unit_code, list(data))
+        unit_name, factor = f"unknown({unit_code})", 1.0
+
+    grams = round(float(value) * factor, 2)
+
+    if status in (STATUS_ZERO, STATUS_UNDER_ZERO):
+        grams = 0.0
+    if status == STATUS_OVER_WEIGHT:
+        raise HardwareError("Scale is over its maximum weight")
+    if status in (7, 8):
+        raise HardwareError("Scale needs to be re-zeroed / calibrated")
+
+    stable = grams > 0 and status != STATUS_IN_MOTION
+    return ScaleReading(grams, stable, True, raw_unit=unit_name, raw=list(data))
+
+
+class HidPostalScale(ScaleDevice):
+    """Real USB HID scale (DYMO M5/M10/M25 and compatible)."""
+
+    name = "hid-postal-scale"
+
+    def __init__(self, vendor_id=0x0922, product_id=0x8003, timeout_ms=2000):
+        self.vendor_id = vendor_id
+        self.product_id = product_id
+        self.timeout_ms = timeout_ms
+        self._device = None
+        self._last_reading = None
+        self._lock = threading.Lock()
+
+    # -- connection ---------------------------------------------------------
+    def _connect(self):
+        if hid is None:
+            raise HardwareError(
+                f"hidapi package is not available: {_HID_IMPORT_ERROR}")
+
+        self._close_no_lock()
+        try:
+            device = hid.device()
+            device.open(self.vendor_id, self.product_id)
+            device.set_nonblocking(0)  # blocking read works better for DYMO
+        except Exception as exc:
+            raise HardwareError(
+                "Scale not found (VID=0x%04x PID=0x%04x): %s"
+                % (self.vendor_id, self.product_id, exc)) from exc
+
+        self._device = device
+        log.info("Scale connected (VID=0x%04x PID=0x%04x)",
+                 self.vendor_id, self.product_id)
+
+    def _close_no_lock(self):
+        self._last_reading = None
+        if self._device is not None:
             try:
-                device.close()
+                self._device.close()
             except Exception:
                 pass
+            self._device = None
 
-        device = hid.device()
-        device.open(VENDOR_ID, PRODUCT_ID)
-        device.set_nonblocking(0)  # blocking read works better for DYMO
-        print("DYMO scale connected")
-        return True
-    except Exception as e:
-        print("Scale connection failed:", e)
-        device = None
-        return False
+    def close(self):
+        with self._lock:
+            self._close_no_lock()
 
+    # -- reading ------------------------------------------------------------
+    def read(self) -> ScaleReading:
+        with self._lock:
+            if self._device is None:
+                self._connect()
+            try:
+                data = self._device.read(6, timeout_ms=self.timeout_ms)
+            except Exception as exc:
+                self._close_no_lock()  # force reconnect next time
+                raise HardwareError(f"Scale read failed: {exc}") from exc
 
-def _read_packet():
-    global device
+            if not data or len(data) < 6:
+                # No new report within the timeout. Some scales only send a
+                # report when the weight changes, so re-use the last value
+                # this connection produced. If we never got one, the scale is
+                # most likely off / asleep.
+                if self._last_reading is not None:
+                    return self._last_reading
+                raise HardwareError("No data received from scale (is it on?)")
 
-    if device is None:
-        if not connect_scale():
-            return None
+            log.debug("RAW SCALE DATA: %s", list(data))
+            reading = decode_dymo_packet(data)
+            self._last_reading = reading
+            return reading
 
-    try:
-        data = device.read(6, timeout_ms=2000)
-        if not data or len(data) < 6:
-            return None
-        return data
-    except Exception as e:
-        print("Scale read failed:", e)
-        device = None
-        return None
-
-
-def _decode_dymo_packet(data):
-    """
-    Typical DYMO packet layout:
-    data[2] = unit
-    data[3] = exponent (signed)
-    data[4] = low byte
-    data[5] = high byte
-    """
-    try:
-        unit_code = data[2]
-        exponent = data[3]
-        raw_weight = data[4] + (data[5] << 8)
-
-        # convert exponent from unsigned byte to signed int
-        if exponent > 128:
-            exponent = exponent - 256
-
-        value = raw_weight * (10 ** exponent)
-
-        # DYMO commonly reports ounces or pounds depending on unit_code
-        # 11 is usually ounces on many DYMO examples
-        # convert to grams when needed
-        if unit_code == 11:  # ounces
-            grams = value * 28.3495
-        elif unit_code == 12:  # pounds
-            grams = value * 453.592
-        else:
-            # assume already grams if unit unknown
-            grams = value
-
-        return round(float(grams), 2)
-    except Exception as e:
-        print("Decode failed:", e, "data=", data)
-        return 0.0
+    @staticmethod
+    def list_hid_devices():
+        """Helper for setup/troubleshooting: list all HID devices."""
+        if hid is None:
+            return []
+        return [
+            {
+                "vendor_id": "0x%04x" % d["vendor_id"],
+                "product_id": "0x%04x" % d["product_id"],
+                "manufacturer": d.get("manufacturer_string"),
+                "product": d.get("product_string"),
+            }
+            for d in hid.enumerate()
+        ]
 
 
+# ---------------------------------------------------------------------------
+# Backwards compatible helpers (used by test_scale.py in the Pi prototype)
+# ---------------------------------------------------------------------------
 def get_weight_grams():
-    data = _read_packet()
-    if data is None:
-        return 0.0
+    from . import get_scale
 
-    print("RAW SCALE DATA:", data)
-    return _decode_dymo_packet(data)
+    return get_scale().read().weight_grams
 
 
 def get_live_weight_grams():
-    """
-    Average a few reads for a smoother live value.
-    """
-    readings = []
+    from . import get_scale
 
-    for _ in range(3):
-        weight = get_weight_grams()
-        if weight > 0:
-            readings.append(weight)
-        time.sleep(0.15)
-
-    if not readings:
-        return 0.0
-
-    return round(sum(readings) / len(readings), 2)
+    return get_scale().read_live().weight_grams

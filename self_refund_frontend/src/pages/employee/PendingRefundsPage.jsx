@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api from "../../services/api";
+import api, { captureUrl } from "../../services/api";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -97,7 +97,7 @@ function PendingRefundsPage() {
                   {item.image_path && (
                     <div className="pr-image-preview">
                       <div className="pr-image-label">Captured Image</div>
-                      <img src={`http://localhost:5000/api/captures/${item.image_path.split("/").pop()}`} alt="Captured item" className="pr-image-thumb" onError={e => { e.target.style.display = "none"; }} />
+                      <img src={captureUrl(item.image_path)} alt="Captured item" className="pr-image-thumb" onError={e => { e.target.style.display = "none"; }} />
                     </div>
                   )}
                   <div className="btn-row pr-actions">

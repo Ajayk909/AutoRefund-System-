@@ -1,0 +1,49 @@
+# ---- Secrets / local configuration -------------------------------------
+.env
+.env.*
+!.env.example
+*.local
+
+# ---- Python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# ---- Node / Vite -----------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# ---- Runtime data (customer images, logs, local databases) ---------------
+self_refund_backend/captures/
+self_refund_backend/logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.backup
+
+# ---- Media / large prototype files that are not source -------------------
+*.mkv
+*.mp4
+*.mov
+self_refund_backend/preview.jpg
+self_refund_backend/screenshot.png
+
+# ---- OS / editors ----------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# one-off migration bundle used by push-to-github.bat
+*.bundle

@@ -1,3 +1,10 @@
+"""
+Load the demo products / receipt / admin user.
+
+WARNING: this DELETES all existing products, receipts, refunds, staff and
+audit logs first. Run with --yes to skip the confirmation prompt.
+"""
+import sys
 from datetime import datetime
 from decimal import Decimal
 from werkzeug.security import generate_password_hash
@@ -5,6 +12,14 @@ from werkzeug.security import generate_password_hash
 from app import create_app, db
 from app.models import Product, Transaction, TransactionItem, Staff, Refund, AuditLog
 
+
+if "--yes" not in sys.argv:
+    answer = input(
+        "This will DELETE all refunds, receipts, products, staff and audit "
+        "logs in the configured database.\nType YES to continue: ")
+    if answer.strip() != "YES":
+        print("Cancelled. Nothing was changed.")
+        sys.exit(1)
 
 app = create_app()
 
@@ -101,5 +116,5 @@ with app.app_context():
     db.session.add(admin)
     db.session.commit()
 
-    print("\n✅ SEED COMPLETE")
+    print("\nSEED COMPLETE")
     print("admin1 / admin123")

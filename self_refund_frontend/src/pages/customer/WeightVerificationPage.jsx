@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api from "../../services/api";
+import api, { API_ORIGIN } from "../../services/api";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -26,8 +26,8 @@ function WeightVerificationPage() {
   const [weight, setWeight] = useState(0);
   const [stable, setStable] = useState(false);
   const [loading, setLoading] = useState(false);
-  const backendHost = window.location.hostname || "localhost";
-  const backendBase = `http://${backendHost}:5000`;
+  const backendBase = API_ORIGIN;
+  const [scaleConnected, setScaleConnected] = useState(true);
   const [displayPreviewUrl, setDisplayPreviewUrl] = useState(`${backendBase}/api/camera/stream`);
   const [cameraLoading, setCameraLoading] = useState(false);
   const [cameraError, setCameraError] = useState("");
@@ -53,7 +53,8 @@ function WeightVerificationPage() {
         const res = await api.get("/scale/live");
         setWeight(Number(res.data.weight_grams || 0));
         setStable(Boolean(res.data.stable));
-      } catch { setWeight(0); setStable(false); }
+        setScaleConnected(true);
+      } catch { setWeight(0); setStable(false); setScaleConnected(false); }
     }, 1000);
     return () => clearInterval(interval);
   }, []);
@@ -84,7 +85,7 @@ function WeightVerificationPage() {
       setLoading(true);
       let finalImagePath = capturedImagePath;
       if (!finalImagePath) { const captured = await captureImage(); if (captured?.image_path) finalImagePath = captured.image_path; }
-      const payload = { transaction_id: transaction.transaction_id, item_id: item.item_id, product_id: item.product_id, measured_weight_grams: Number(weight), image_path: finalImagePath || "mock_images/test.jpg", kiosk_id: "KIOSK-001" };
+      const payload = { transaction_id: transaction.transaction_id, item_id: item.item_id, product_id: item.product_id, measured_weight_grams: Number(weight), image_path: finalImagePath || null };
       const res = await api.post("/refunds/start", payload);
       if (!res.data?.success) throw new Error(res.data?.message || "Refund request failed");
       localStorage.setItem("refundResult", JSON.stringify(res.data.refund));
@@ -113,8 +114,8 @@ function WeightVerificationPage() {
   const progress = item.expected_weight_grams > 0 ? Math.min((weight / item.expected_weight_grams) * 100, 115) : 0;
   const progressCapped = Math.min(progress, 100);
   const ringColor = !stable ? "#38bdf8" : ok ? "#10fbc4" : "#fbbf24";
-  const stageLabel = !stable ? "Measuring…" : ok ? "✓ Weight verified" : "⚠ Weight differs";
-  const stageDesc = !stable ? "Keep the item still on the scale pad." : ok ? "This item matches the expected weight. Ready to submit!" : `This item differs by ${Math.abs(diff).toFixed(1)} g from the expected weight. Your refund may need manual review.`;
+  const stageLabel = !scaleConnected ? "Scale not responding" : !stable ? "Measuring…" : ok ? "✓ Weight verified" : "⚠ Weight differs";
+  const stageDesc = !scaleConnected ? "Please make sure the scale is switched on. If this continues, ask an employee for help." : !stable ? "Keep the item still on the scale pad." : ok ? "This item matches the expected weight. Ready to submit!" : `This item differs by ${Math.abs(diff).toFixed(1)} g from the expected weight. Your refund may need manual review.`;
 
   return (
     <PageWrapper>
