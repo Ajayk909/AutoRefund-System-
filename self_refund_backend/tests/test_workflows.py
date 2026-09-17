@@ -18,14 +18,17 @@ def _capture(client):
     return r.get_json()
 
 
-def _submit(client, tx, item, weight, image_path=None):
-    return client.post("/api/refunds/start", json={
-        "transaction_id": tx["transaction_id"],
-        "item_id": item["item_id"],
-        "product_id": item["product_id"],
-        "measured_weight_grams": weight,
-        "image_path": image_path,
-    })
+def _submit(client, tx, item, weight, capture_id=None, headers=None, **extra):
+    """Put ``weight`` grams on the (mock) scale and submit the return.
+
+    The weight is NOT sent in the request: the backend reads the scale.
+    """
+    client.application.mock_scale.set_weight(weight)
+    body = {"transaction_id": tx["transaction_id"], "item_id": item["item_id"],
+            "product_id": item["product_id"], **extra}
+    if capture_id:
+        body["capture_id"] = capture_id
+    return client.post("/api/refunds/start", json=body, headers=headers or {})
 
 
 def test_health(client):
@@ -52,20 +55,26 @@ def test_normal_return_is_approved_with_image(client, app):
     assert weight["success"] and weight["weight_grams"] == 250.0
 
     cap = _capture(client)
-    assert (app.config["CAPTURE_DIR"] / cap["filename"]).is_file()
+    assert (app.config["CAPTURE_DIR"] / cap["file_name"]).is_file()
+    assert cap["preview_data_url"].startswith("data:image/jpeg;base64,")
+    assert "image_path" not in cap and "image_url" not in cap
 
-    r = _submit(client, tx, item, weight["weight_grams"], cap["image_path"])
+    r = _submit(client, tx, item, 250, cap["capture_id"])
     assert r.status_code == 201
     refund = r.get_json()["refund"]
     assert refund["decision_status"] == "approved"
     assert refund["weight_match"] is True
     assert refund["refund_amount"] == 2.99
-    assert refund["image_path"] == cap["image_path"]
+    assert refund["image_captured"] is True
+    stored = Refund.query.filter_by(refund_id=refund["refund_id"]).one()
+    assert stored.image_path == f"captures/{cap['file_name']}"
 
     # evidence image is NOT public; staff can view it
-    assert client.get(cap["image_url"]).status_code == 401
+    image_url = f"/api/refunds/{refund['refund_id']}/image"
+    assert client.get(image_url).status_code == 401
+    assert client.get(f"/api/captures/{cap['file_name']}").status_code == 401
     from tests.conftest import login
-    img = client.get(cap["image_url"], headers=login(client))
+    img = client.get(image_url, headers=login(client))
     assert img.status_code == 200 and img.mimetype == "image/jpeg"
 
     # audit trail recorded
@@ -102,6 +111,7 @@ def test_duplicate_return_is_blocked_and_logged(client):
 
     r = _submit(client, tx, item, 250)
     assert r.status_code == 400
+    assert r.get_json()["code"] == "DUPLICATE_RETURN"
     assert r.get_json()["existing_refund_status"] == "approved"
     assert Refund.query.count() == 1
     assert AuditLog.query.filter_by(event_type="duplicate_refund_blocked").count() == 1
@@ -110,28 +120,30 @@ def test_duplicate_return_is_blocked_and_logged(client):
 def test_wrong_product_rejected(client):
     r = client.post("/api/refunds/start", json={
         "receipt_number": "RCP-1001", "barcode": "999999",
-        "measured_weight_grams": 100,
     })
     assert r.status_code == 400
     assert "not part" in r.get_json()["message"]
 
 
-def test_missing_or_invalid_weight(client):
+def test_empty_scale_is_not_accepted(client):
     tx = _transaction(client)
     item = _item(tx, "111111")
-    assert client.post("/api/refunds/start", json={
-        "transaction_id": tx["transaction_id"], "product_id": item["product_id"],
-    }).status_code == 400
-    assert _submit(client, tx, item, "abc").status_code == 400
-    assert _submit(client, tx, item, -5).status_code == 400
+    r = _submit(client, tx, item, 0)
+    assert r.status_code == 409 and r.get_json()["code"] == "SCALE_NOT_READY"
     assert Refund.query.count() == 0
 
 
-def test_fake_image_path_is_not_stored(client):
+def test_fake_image_path_is_not_stored(client, app):
+    app.mock_camera.connected = False  # no server photo possible either
     tx = _transaction(client)
-    r = _submit(client, tx, _item(tx, "111111"), 250, "mock_images/test.jpg")
+    r = _submit(client, tx, _item(tx, "111111"), 250,
+                capture_id="../../mock_images/test", image_path="mock_images/test.jpg")
     assert r.status_code == 201
-    assert r.get_json()["refund"]["image_path"] is None
+    body = r.get_json()["refund"]
+    assert body["image_captured"] is False
+    # weight matched, but without a photo it needs an employee
+    assert body["decision_status"] == "pending_review"
+    assert Refund.query.one().image_path is None
 
 
 def test_employee_approve_and_reject(client, staff_headers):

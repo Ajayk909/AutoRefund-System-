@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
-import api, { API_ORIGIN } from "../../services/api";
+import api, { API_ORIGIN, errorMessage } from "../../services/api";
+
+const newAttemptKey = () => (crypto.randomUUID ? crypto.randomUUID() : `k${Date.now()}${Math.random().toString(16).slice(2)}`);
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -31,7 +33,10 @@ function WeightVerificationPage() {
   const [displayPreviewUrl, setDisplayPreviewUrl] = useState(`${backendBase}/api/camera/stream`);
   const [cameraLoading, setCameraLoading] = useState(false);
   const [cameraError, setCameraError] = useState("");
-  const [capturedImagePath, setCapturedImagePath] = useState("");
+  const [captureId, setCaptureId] = useState("");
+  // One key per return attempt: a retry after a network error reuses it, so
+  // the backend returns the same refund instead of creating a second one.
+  const attemptKeyRef = useRef(newAttemptKey());
   const [capturedImageName, setCapturedImageName] = useState("");
   const navigate = useNavigate();
   const captureInProgressRef = useRef(false);
@@ -44,7 +49,8 @@ function WeightVerificationPage() {
   }, []);
 
   useEffect(() => {
-    setCapturedImagePath(""); setCapturedImageName(""); setCameraError(""); setDisplayPreviewUrl(`${backendBase}/api/camera/stream`);
+    setCaptureId(""); setCapturedImageName(""); setCameraError(""); setDisplayPreviewUrl(`${backendBase}/api/camera/stream`);
+    attemptKeyRef.current = newAttemptKey();
   }, [backendBase, item?.product_id, item?.barcode, transaction?.receipt_number]);
 
   useEffect(() => {
@@ -66,15 +72,12 @@ function WeightVerificationPage() {
       const res = await api.post("/camera/capture");
       const data = res.data;
       if (data.success) {
-        const backendImagePath = data.image_path || "";
-        const backendImageUrl = data.image_url || "";
-        const fileName = data.file_name || backendImagePath.split("/").pop() || "captured-image.jpg";
-        setCapturedImagePath(backendImagePath); setCapturedImageName(fileName);
-        if (backendImageUrl) setDisplayPreviewUrl(`${backendBase}${backendImageUrl}?ts=${Date.now()}`);
+        setCaptureId(data.capture_id); setCapturedImageName("Photo taken");
+        if (data.preview_data_url) setDisplayPreviewUrl(data.preview_data_url);
         return data;
       }
       setCameraError(data.message || "Failed to capture image"); return null;
-    } catch { setCameraError("Failed to capture image from camera"); return null; }
+    } catch (err) { setCameraError(errorMessage(err, "Camera unavailable. Please try again.")); return null; }
     finally { captureInProgressRef.current = false; setCameraLoading(false); }
   };
 
@@ -83,15 +86,19 @@ function WeightVerificationPage() {
     if (item.is_refundable === false) { alert("This item has already been submitted for refund."); navigate("/customer/items"); return; }
     try {
       setLoading(true);
-      let finalImagePath = capturedImagePath;
-      if (!finalImagePath) { const captured = await captureImage(); if (captured?.image_path) finalImagePath = captured.image_path; }
-      const payload = { transaction_id: transaction.transaction_id, item_id: item.item_id, product_id: item.product_id, measured_weight_grams: Number(weight), image_path: finalImagePath || null };
-      const res = await api.post("/refunds/start", payload);
+      let finalCaptureId = captureId;
+      if (!finalCaptureId) { const captured = await captureImage(); if (captured?.capture_id) finalCaptureId = captured.capture_id; }
+      // The weight shown on screen is for guidance only: the backend reads the
+      // scale itself when the return is submitted.
+      const payload = { transaction_id: transaction.transaction_id, item_id: item.item_id, product_id: item.product_id, quantity: 1, capture_id: finalCaptureId || undefined };
+      const res = await api.post("/refunds/start", payload, { headers: { "Idempotency-Key": attemptKeyRef.current } });
       if (!res.data?.success) throw new Error(res.data?.message || "Refund request failed");
       localStorage.setItem("refundResult", JSON.stringify(res.data.refund));
       navigate("/customer/result");
     } catch (err) {
-      alert(err?.response?.data?.message || err?.response?.data?.error || err?.message || "Failed to process refund. Please try again.");
+      // No response = network problem: keep the same attempt key for the retry.
+      if (err?.response) attemptKeyRef.current = newAttemptKey();
+      alert(errorMessage(err, "We couldn't submit your return right now. Please try again."));
     } finally { setLoading(false); }
   };
 
@@ -214,15 +221,15 @@ function WeightVerificationPage() {
               <div className="wv2-camera-card">
                 <div className="wv2-camera-top">
                   <div className="wv2-camera-label">Camera Preview</div>
-                  <button className="wv2-camera-btn" type="button" onClick={() => captureImage()} disabled={cameraLoading || !!capturedImagePath}>
-                    {cameraLoading ? "Capturing..." : capturedImagePath ? "Captured ✓" : "Capture Now"}
+                  <button className="wv2-camera-btn" type="button" onClick={() => captureImage()} disabled={cameraLoading || !!captureId}>
+                    {cameraLoading ? "Capturing..." : captureId ? "Captured ✓" : "Capture Now"}
                   </button>
                 </div>
                 <div className="wv2-camera-frame">
                   <div className="wv2-camera-corner wv2-cc-tl" /><div className="wv2-camera-corner wv2-cc-tr" />
                   <div className="wv2-camera-corner wv2-cc-bl" /><div className="wv2-camera-corner wv2-cc-br" />
                   <img src={displayPreviewUrl} alt="Camera preview" className="wv2-camera-img" onError={() => setCameraError("Live camera stream not available")} />
-                  {!capturedImagePath && <div className="wv2-camera-scan" />}
+                  {!captureId && <div className="wv2-camera-scan" />}
                 </div>
                 <div className="wv2-camera-status">
                   <span className={`wv2-camera-dot ${cameraError ? "wv2-camera-dot-error" : capturedImageName ? "wv2-camera-dot-ok" : ""}`} />

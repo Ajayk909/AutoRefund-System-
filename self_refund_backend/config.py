@@ -51,6 +51,17 @@ class Config:
     CORS_ORIGINS = os.getenv("CORS_ORIGINS",
                              "http://localhost:5173,http://127.0.0.1:5173")
 
+    # --- Return rules (Phase 0: global; Phase 1 moves these to per-retailer
+    #     versioned policies) ---------------------------------------------
+    RETURN_WINDOW_DAYS = _int("RETURN_WINDOW_DAYS", 30)
+    # How many times a customer may try again after a rejected return.
+    RETURN_RETRY_LIMIT_AFTER_REJECTION = _int("RETURN_RETRY_LIMIT_AFTER_REJECTION", 1)
+    # Without a photo, a weight match goes to employee review instead of
+    # being approved automatically.
+    REQUIRE_PHOTO_FOR_AUTO_APPROVAL = _bool("REQUIRE_PHOTO_FOR_AUTO_APPROVAL", True)
+    # A kiosk photo must be used within this many seconds of being taken.
+    CAPTURE_MAX_AGE_SECONDS = _int("CAPTURE_MAX_AGE_SECONDS", 900)
+
     # --- Staff authentication ----------------------------------------------
     STAFF_SESSION_HOURS = _int("STAFF_SESSION_HOURS", 8)
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
+import api from "../../services/api";
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -25,6 +26,13 @@ function KioskShell() {
   );
 }
 
+const INELIGIBLE_TEXT = {
+  ALREADY_RETURNED: "Already returned",
+  PENDING_REVIEW: "Waiting for an employee to review",
+  OUTSIDE_RETURN_WINDOW: "Outside the return period. Please visit customer service.",
+  TOO_MANY_ATTEMPTS: "Please visit customer service for help with this item",
+};
+
 function ItemSelectionPage() {
   const [transaction, setTransaction] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
@@ -32,17 +40,17 @@ function ItemSelectionPage() {
 
   useEffect(() => {
     const stored = localStorage.getItem("transactionData");
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      const normalizedItems = Array.isArray(parsed.items)
-        ? parsed.items.map((item) => ({
-            ...item,
-            is_refundable: typeof item.is_refundable === "boolean" ? item.is_refundable : true,
-            refund_status: item.refund_status || null,
-          }))
-        : [];
-      setTransaction({ ...parsed, items: normalizedItems });
-    }
+    if (!stored) return;
+    const parsed = JSON.parse(stored);
+    const show = (data) => setTransaction({ ...data, items: Array.isArray(data.items) ? data.items : [] });
+    show(parsed);
+    // Refresh eligibility from the server (another return may have happened).
+    api.get(`/transactions/${encodeURIComponent(parsed.receipt_number)}`)
+      .then((res) => {
+        localStorage.setItem("transactionData", JSON.stringify(res.data.transaction));
+        show(res.data.transaction);
+      })
+      .catch(() => { /* keep the cached receipt; the server re-checks on submit */ });
   }, []);
 
   const handleSelectItem = (item) => {
@@ -114,8 +122,8 @@ function ItemSelectionPage() {
             </div>
             <div className="isp-rb-divider" />
             <div className="isp-rb-item">
-              <span className="isp-rb-label">Customer</span>
-              <span className="isp-rb-val">{transaction.customer_email || "N/A"}</span>
+              <span className="isp-rb-label">Return by</span>
+              <span className="isp-rb-val">{transaction.return_deadline ? new Date(transaction.return_deadline).toLocaleDateString() : "N/A"}</span>
             </div>
             <div className="isp-rb-divider" />
             <div className="isp-rb-item">
@@ -143,11 +151,14 @@ function ItemSelectionPage() {
                     <div className="item-tags">
                       <span className="itag">Barcode: {item.barcode}</span>
                       <span className="itag">Qty: {item.quantity}</span>
+                      {item.quantity > 1 && item.returnable_quantity !== undefined && (
+                        <span className="itag">{item.returnable_quantity} of {item.quantity} can be returned</span>
+                      )}
                       <span className="itag">Expected: {item.expected_weight_grams} g</span>
                     </div>
                     {isDisabled && (
                       <div className="refund-locked-note">
-                        {item.refund_status ? `Already submitted for refund (${item.refund_status})` : "Already submitted for refund"}
+                        {INELIGIBLE_TEXT[item.ineligible_reason] || "This item can't be returned here"}
                       </div>
                     )}
                   </div>

@@ -1,8 +1,11 @@
 from decimal import Decimal
 from datetime import datetime
+import base64
 import logging
 import os
+import secrets
 import cv2
+from sqlalchemy.exc import IntegrityError
 
 from flask import Blueprint, current_app, g, jsonify, request, Response, send_from_directory
 from werkzeug.security import check_password_hash
@@ -24,7 +27,16 @@ from app.auth import (
     parse_uuid,
     require_staff,
 )
-from app.refund_states import APPROVED, REFUNDED, REJECTED, InvalidTransition, ensure_transition
+from app import returns
+from app.refund_states import (
+    APPROVED,
+    PENDING_REVIEW,
+    QUANTITY_CONSUMING,
+    REFUNDED,
+    REJECTED,
+    InvalidTransition,
+    ensure_transition,
+)
 from app.timeutil import utcnow
 from hardware import HardwareError, get_camera, get_scale
 from hardware.barcode import backend_name as barcode_backend_name
@@ -35,17 +47,6 @@ log = logging.getLogger("autorefund.api")
 
 def capture_dir():
     return str(current_app.config["CAPTURE_DIR"])
-
-
-def existing_capture_path(image_path):
-    """Return the normalized captures/<file> path only if the file exists."""
-    normalized = normalize_capture_path(image_path)
-    if not normalized:
-        return None
-    filename = os.path.basename(normalized)
-    if os.path.isfile(os.path.join(capture_dir(), filename)):
-        return normalized
-    return None
 
 
 def product_to_dict(product):
@@ -99,6 +100,11 @@ def lookup_product(barcode):
 
 @api_bp.get("/transactions/<receipt_number>")
 def get_transaction(receipt_number):
+    """Receipt lookup for the kiosk screen.
+
+    Deliberately excludes customer email and payment method: the kiosk only
+    needs to show which items can be returned.
+    """
     transaction = Transaction.query.filter_by(receipt_number=receipt_number).first()
 
     if not transaction:
@@ -114,13 +120,10 @@ def get_transaction(receipt_number):
         .all()
     )
 
+    cfg = current_app.config
     item_list = []
     for item, product in items:
-        existing_refund = Refund.query.filter_by(
-            transaction_id=transaction.transaction_id,
-            product_id=product.product_id
-        ).first()
-
+        eligibility = returns.line_eligibility(transaction, item, cfg)
         item_list.append({
             "item_id": str(item.item_id),
             "product_id": str(product.product_id),
@@ -130,165 +133,228 @@ def get_transaction(receipt_number):
             "price_at_purchase": float(item.price_at_purchase),
             "expected_weight_grams": float(product.expected_weight_grams),
             "weight_tolerance_percent": float(product.weight_tolerance_percent),
-            "is_refundable": existing_refund is None,
-            "refund_status": existing_refund.decision_status if existing_refund else None,
+            "returned_quantity": eligibility["returned_quantity"],
+            "returnable_quantity": eligibility["returnable_quantity"],
+            "is_refundable": eligibility["is_refundable"],
+            "ineligible_reason": eligibility["ineligible_reason"],
+            "refund_status": eligibility["latest_status"],
         })
 
+    deadline = returns.return_deadline(transaction, cfg["RETURN_WINDOW_DAYS"])
     return jsonify({
         "success": True,
         "transaction": {
             "transaction_id": str(transaction.transaction_id),
             "receipt_number": transaction.receipt_number,
             "purchase_date": transaction.purchase_date.isoformat(),
-            "payment_method": transaction.payment_method,
-            "customer_email": transaction.customer_email,
             "total_amount": float(transaction.total_amount),
+            "return_deadline": deadline.isoformat(),
+            "within_return_window": returns.within_return_window(
+                transaction, cfg["RETURN_WINDOW_DAYS"]),
             "items": item_list
         }
     })
 
 
+_IGNORED_CLIENT_FIELDS = ("measured_weight_grams", "kiosk_id", "image_path")
+
+
+def _audit_blocked(event_type, transaction, product, kiosk_id, **details):
+    db.session.add(AuditLog(event_type=event_type, refund_id=details.pop("refund_id", None),
+                            details={
+                                "receipt_number": transaction.receipt_number,
+                                "barcode": product.barcode,
+                                "kiosk_id": kiosk_id,
+                                "timestamp": utcnow().isoformat(),
+                                **details,
+                            }))
+    db.session.commit()
+
+
+def _refund_result(refund, product, weight, image_captured, replay=False):
+    return {
+        "refund_id": str(refund.refund_id),
+        "decision_status": refund.decision_status,
+        "decision_reason": refund.decision_reason,
+        "weight_match": refund.weight_match,
+        "quantity": refund.quantity,
+        "expected_weight_grams": float(weight["expected"]) if weight else
+        float(product.expected_weight_grams) * refund.quantity,
+        "measured_weight_grams": float(refund.measured_weight_grams),
+        "refund_amount": float(refund.refund_amount),
+        "image_captured": image_captured,
+        "idempotent_replay": replay,
+    }
+
+
 @api_bp.post("/refunds/start")
 def start_refund():
-    data = request.get_json() or {}
+    """Create a return for one receipt line.
 
-    receipt_number = data.get("receipt_number")
-    barcode = data.get("barcode")
-    transaction_id = data.get("transaction_id")
-    product_id = data.get("product_id")
-    item_id = data.get("item_id")
-    measured_weight_grams = data.get("measured_weight_grams")
-    requested_image_path = data.get("image_path")
-    image_path = existing_capture_path(requested_image_path)
-    if requested_image_path and not image_path:
-        log.warning("Refund submitted with missing image file: %s", requested_image_path)
-    kiosk_id = data.get("kiosk_id") or current_app.config["KIOSK_ID"]
+    Security model (Phase 0, single kiosk PC):
+    * weight is read from the scale HERE, never taken from the request
+    * kiosk id comes from configuration, never from the request
+    * the photo must be one this backend captured recently (capture_id);
+      otherwise the backend takes the photo itself
+    * the receipt line is locked while quantity is checked, so parallel
+      submissions cannot return the same unit twice
+    * an Idempotency-Key makes a retried submission return the same refund
+    """
+    data = request.get_json(silent=True) or {}
+    cfg = current_app.config
+    kiosk_id = cfg["KIOSK_ID"]
 
-    if measured_weight_grams is None:
-        return jsonify({
-            "success": False,
-            "message": "measured_weight_grams is required"
-        }), 400
-
-    transaction = None
-    product = None
-
-    if receipt_number:
-        transaction = Transaction.query.filter_by(receipt_number=receipt_number).first()
-    elif transaction_id:
-        transaction = Transaction.query.filter_by(transaction_id=transaction_id).first()
-
-    if not transaction:
-        return jsonify({
-            "success": False,
-            "message": "Transaction not found"
-        }), 404
-
-    if barcode:
-        product = Product.query.filter_by(barcode=barcode).first()
-    elif product_id:
-        product = Product.query.filter_by(product_id=product_id).first()
-
-    if not product:
-        return jsonify({
-            "success": False,
-            "message": "Product not found"
-        }), 404
-
-    transaction_item = None
-
-    if item_id:
-        transaction_item = TransactionItem.query.filter_by(
-            item_id=item_id,
-            transaction_id=transaction.transaction_id
-        ).first()
-
-    if not transaction_item:
-        transaction_item = TransactionItem.query.filter_by(
-            transaction_id=transaction.transaction_id,
-            product_id=product.product_id
-        ).first()
-
-    if not transaction_item:
-        return jsonify({
-            "success": False,
-            "message": "This product is not part of the provided transaction"
-        }), 400
-
-    existing_refund = Refund.query.filter_by(
-        transaction_id=transaction.transaction_id,
-        product_id=product.product_id
-    ).first()
-
-    if existing_refund:
-        log.warning(
-            "Duplicate refund attempt blocked: receipt=%s product=%s existing=%s",
-            transaction.receipt_number, product.barcode, existing_refund.refund_id)
-        db.session.add(AuditLog(
-            event_type="duplicate_refund_blocked",
-            refund_id=existing_refund.refund_id,
-            staff_id=None,
-            details={
-                "receipt_number": transaction.receipt_number,
-                "barcode": product.barcode,
-                "kiosk_id": kiosk_id,
-                "existing_refund_status": existing_refund.decision_status,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-        ))
-        db.session.commit()
-        return jsonify({
-            "success": False,
-            "message": "This item has already been submitted for refund.",
-            "existing_refund_status": existing_refund.decision_status
-        }), 400
+    for field in _IGNORED_CLIENT_FIELDS:
+        if field in data:
+            log.warning("Ignoring client-supplied %s on /refunds/start", field)
 
     try:
-        measured = Decimal(str(measured_weight_grams))
-    except Exception:
-        return jsonify({
-            "success": False,
-            "message": "measured_weight_grams must be a number"
-        }), 400
-    if not measured.is_finite() or measured < 0:
-        return jsonify({
-            "success": False,
-            "message": "measured_weight_grams must be a non-negative number"
-        }), 400
-    expected = Decimal(str(product.expected_weight_grams))
-    tolerance_percent = Decimal(str(product.weight_tolerance_percent))
+        return _start_refund(data, cfg, kiosk_id)
+    except returns.ReturnError as err:
+        db.session.rollback()
+        return jsonify(err.body()), err.status
 
-    allowed_diff = expected * (tolerance_percent / Decimal("100"))
-    min_weight = expected - allowed_diff
-    max_weight = expected + allowed_diff
 
-    weight_match = min_weight <= measured <= max_weight
+def _start_refund(data, cfg, kiosk_id):
+    ReturnError = returns.ReturnError
 
-    if weight_match:
-        decision_status = "approved"
-        decision_reason = "Weight matched expected product tolerance"
+    # --- idempotency key -----------------------------------------------------
+    key = (request.headers.get("Idempotency-Key") or data.get("idempotency_key") or "").strip()
+    if key and not returns.IDEMPOTENCY_KEY_RE.match(key):
+        raise ReturnError("INVALID_IDEMPOTENCY_KEY", "Invalid request. Please try again.")
+
+    # --- resolve receipt and line -------------------------------------------
+    transaction = None
+    if data.get("receipt_number"):
+        transaction = Transaction.query.filter_by(receipt_number=data["receipt_number"]).first()
+    elif parse_uuid(data.get("transaction_id")):
+        transaction = db.session.get(Transaction, parse_uuid(data["transaction_id"]))
+    if not transaction:
+        raise ReturnError("RECEIPT_NOT_FOUND", "Transaction not found", 404)
+
+    product = None
+    if data.get("barcode"):
+        product = Product.query.filter_by(barcode=data["barcode"]).first()
+    elif parse_uuid(data.get("product_id")):
+        product = db.session.get(Product, parse_uuid(data["product_id"]))
+
+    transaction_item = None
+    if parse_uuid(data.get("item_id")):
+        transaction_item = TransactionItem.query.filter_by(
+            item_id=parse_uuid(data["item_id"]),
+            transaction_id=transaction.transaction_id).first()
+        if transaction_item and product and transaction_item.product_id != product.product_id:
+            transaction_item = None
+        if transaction_item and not product:
+            product = db.session.get(Product, transaction_item.product_id)
+    if not product:
+        raise ReturnError("PRODUCT_NOT_FOUND", "Product not found", 404)
+    if not transaction_item:
+        transaction_item = TransactionItem.query.filter_by(
+            transaction_id=transaction.transaction_id, product_id=product.product_id).first()
+    if not transaction_item:
+        raise ReturnError("NOT_ON_RECEIPT", "This product is not part of the provided transaction")
+
+    # --- replayed request? ---------------------------------------------------
+    if key:
+        existing = Refund.query.filter_by(idempotency_key=key).first()
+        if existing:
+            return _idempotent_replay(existing, transaction_item, product)
+
+    # --- quantity -------------------------------------------------------------
+    raw_quantity = data.get("quantity", 1)
+    try:
+        quantity = int(raw_quantity)
+        if isinstance(raw_quantity, bool) or str(raw_quantity).strip() != str(quantity):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ReturnError("INVALID_QUANTITY", "Please choose how many items you are returning.")
+    if quantity < 1:
+        raise ReturnError("INVALID_QUANTITY", "Please choose how many items you are returning.")
+
+    # --- return window --------------------------------------------------------
+    if not returns.within_return_window(transaction, cfg["RETURN_WINDOW_DAYS"]):
+        log.info("Return outside window: receipt=%s", transaction.receipt_number)
+        raise ReturnError(
+            "OUTSIDE_RETURN_WINDOW",
+            f"This item is outside the {cfg['RETURN_WINDOW_DAYS']}-day return window. "
+            "Please visit customer service.")
+
+    # Cheap check first so blocked returns don't weigh or photograph anything.
+    # It is repeated under the row lock below, which is what makes it safe.
+    _check_line_available(transaction, transaction_item, product, quantity, kiosk_id, cfg)
+
+    # --- hardware (before taking any database lock) --------------------------
+    scale = get_scale()
+    try:
+        reading = scale.read_live()
+    except HardwareError as exc:
+        log.warning("Scale unavailable during refund submission: %s", exc)
+        raise ReturnError("SCALE_UNAVAILABLE",
+                          "The scale isn't responding. Please ask an employee for help.", 503)
+    measured = Decimal(str(reading.weight_grams))
+    if not reading.stable or measured <= 0:
+        raise ReturnError("SCALE_NOT_READY",
+                          "Place your item on the scale and keep it still, then try again.", 409,
+                          measured_weight_grams=float(measured), stable=bool(reading.stable))
+
+    image_path = returns.resolve_capture(data.get("capture_id"), capture_dir(),
+                                         cfg["CAPTURE_MAX_AGE_SECONDS"])
+    if data.get("capture_id") and not image_path:
+        log.warning("Capture id not usable (unknown, expired or already used); recapturing")
+    camera = get_camera()
+    if not image_path:
+        try:
+            image_path = camera.capture_image()["relative_path"]
+        except Exception as exc:  # camera errors must not crash the return
+            log.warning("Camera capture failed during refund submission: %s", exc)
+            image_path = None
+
+    # --- lock the receipt line and apply the rules ---------------------------
+    TransactionItem.query.filter_by(item_id=transaction_item.item_id).with_for_update().one()
+
+    if key:  # a parallel request with the same key may have just finished
+        existing = Refund.query.filter_by(idempotency_key=key).first()
+        if existing:
+            db.session.rollback()
+            return _idempotent_replay(existing, transaction_item, product)
+
+    rejected = _check_line_available(transaction, transaction_item, product, quantity,
+                                     kiosk_id, cfg)
+
+    weight = returns.weight_check(product, quantity, measured)
+    if not weight["match"]:
+        decision_status, decision_reason = "pending_review", "Weight outside allowed tolerance"
+    elif image_path is None and cfg["REQUIRE_PHOTO_FOR_AUTO_APPROVAL"]:
+        decision_status, decision_reason = "pending_review", "No item photo could be captured"
     else:
-        decision_status = "pending_review"
-        decision_reason = "Weight outside allowed tolerance"
+        decision_status, decision_reason = "approved", "Weight matched expected product tolerance"
 
+    now = utcnow()
     refund = Refund(
         transaction_id=transaction.transaction_id,
         product_id=product.product_id,
+        transaction_item_id=transaction_item.item_id,
+        quantity=quantity,
         kiosk_id=kiosk_id,
         measured_weight_grams=measured,
-        weight_match=weight_match,
-        refund_amount=transaction_item.price_at_purchase,
-        refund_date=datetime.utcnow(),
+        weight_match=weight["match"],
+        refund_amount=transaction_item.price_at_purchase * quantity,
+        refund_date=now,
         decision_status=decision_status,
         decision_reason=decision_reason,
         image_path=image_path,
-        staff_override=False
+        staff_override=False,
+        idempotency_key=key or None,
     )
-
     db.session.add(refund)
-    db.session.flush()
+    try:
+        db.session.flush()
+    except IntegrityError:
+        db.session.rollback()
+        raise ReturnError("IDEMPOTENCY_KEY_REUSED", "Invalid request. Please start again.", 422)
 
-    audit = AuditLog(
+    db.session.add(AuditLog(
         event_type="refund_started",
         refund_id=refund.refund_id,
         staff_id=None,
@@ -296,34 +362,70 @@ def start_refund():
             "receipt_number": transaction.receipt_number,
             "barcode": product.barcode,
             "kiosk_id": kiosk_id,
-            "expected_weight_grams": float(expected),
+            "quantity": quantity,
+            "expected_weight_grams": float(weight["expected"]),
             "measured_weight_grams": float(measured),
-            "weight_match": weight_match,
-            "decision_status": decision_status,
-            "image_captured": image_path is not None,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-    db.session.add(audit)
-    db.session.commit()
-    log.info("Refund %s created: receipt=%s product=%s weight=%s expected=%s status=%s",
-             refund.refund_id, transaction.receipt_number, product.barcode,
-             measured, expected, decision_status)
-
-    return jsonify({
-        "success": True,
-        "refund": {
-            "refund_id": str(refund.refund_id),
+            "weight_source": scale.name,
+            "hardware_mock": bool(scale.is_mock or camera.is_mock),
+            "weight_match": weight["match"],
             "decision_status": decision_status,
             "decision_reason": decision_reason,
-            "weight_match": weight_match,
-            "expected_weight_grams": float(expected),
-            "measured_weight_grams": float(measured),
-            "refund_amount": float(transaction_item.price_at_purchase),
-            "image_path": image_path
+            "image_captured": image_path is not None,
+            "previous_rejections": rejected,
+            "timestamp": now.isoformat()
         }
-    }), 201
+    ))
+    db.session.commit()
+    log.info("Refund %s created: receipt=%s product=%s qty=%s weight=%s expected=%s status=%s",
+             refund.refund_id, transaction.receipt_number, product.barcode, quantity,
+             measured, weight["expected"], decision_status)
+
+    return jsonify({"success": True,
+                    "refund": _refund_result(refund, product, weight, image_path is not None)}), 201
+
+
+def _check_line_available(transaction, transaction_item, product, quantity, kiosk_id, cfg):
+    """Quantity / duplicate / retry-limit rules. Returns rejected attempts."""
+    ReturnError = returns.ReturnError
+    used, rejected, refunds = returns.count_line_usage(transaction_item)
+    remaining = transaction_item.quantity - used
+
+    if remaining <= 0 or quantity > remaining:
+        latest = next((r for r in refunds if r.decision_status in QUANTITY_CONSUMING), None)
+        if remaining <= 0 and latest:
+            log.warning("Duplicate refund attempt blocked: receipt=%s product=%s existing=%s",
+                        transaction.receipt_number, product.barcode, latest.refund_id)
+            _audit_blocked("duplicate_refund_blocked", transaction, product, kiosk_id,
+                           refund_id=latest.refund_id,
+                           existing_refund_status=latest.decision_status,
+                           requested_quantity=quantity)
+            message = ("This item is already waiting for an employee to review it."
+                       if latest.decision_status == PENDING_REVIEW
+                       else "This item has already been submitted for refund.")
+            raise ReturnError("DUPLICATE_RETURN", message,
+                              existing_refund_status=latest.decision_status)
+        raise ReturnError("QUANTITY_EXCEEDS_REMAINING",
+                          f"Only {max(remaining, 0)} of this item can still be returned.",
+                          returnable_quantity=max(remaining, 0))
+
+    retry_limit = cfg["RETURN_RETRY_LIMIT_AFTER_REJECTION"]
+    if rejected > retry_limit:
+        _audit_blocked("return_attempt_limit_reached", transaction, product, kiosk_id,
+                       rejected_attempts=rejected, retry_limit=retry_limit)
+        raise ReturnError("TOO_MANY_ATTEMPTS",
+                          "We can't accept this return at the kiosk. "
+                          "Please visit customer service for help.")
+    return rejected
+
+
+def _idempotent_replay(existing, transaction_item, product):
+    same_line = (existing.transaction_item_id == transaction_item.item_id)
+    if not same_line:
+        raise returns.ReturnError("IDEMPOTENCY_KEY_REUSED",
+                                  "Invalid request. Please start again.", 422)
+    log.info("Idempotent replay for refund %s", existing.refund_id)
+    return jsonify({"success": True, "refund": _refund_result(
+        existing, product, None, existing.image_path is not None, replay=True)}), 200
 
 
 @api_bp.get("/scale/read")
@@ -452,19 +554,28 @@ def camera_stream():
 
 @api_bp.post("/camera/capture")
 def camera_capture():
+    """Take the item photo.
+
+    Returns an unguessable capture_id (the kiosk sends it with the return)
+    and an inline preview, so evidence files are never served publicly.
+    """
     try:
         result = get_camera().capture_image()
-        filename = result["filename"]
-        image_path = result["relative_path"]
-        image_url = f"/api/captures/{filename}"
-        log.info("Image captured: %s", image_path)
+        capture_id = secrets.token_hex(16)
+        stem, _ = os.path.splitext(result["filename"])
+        filename = f"{stem}_{capture_id}.jpg"
+        src = os.path.join(capture_dir(), result["filename"])
+        dst = os.path.join(capture_dir(), filename)
+        os.replace(src, dst)
+        with open(dst, "rb") as fh:
+            preview = base64.b64encode(fh.read()).decode("ascii")
+        log.info("Image captured: %s", filename)
 
         return jsonify({
             "success": True,
-            "filename": filename,
+            "capture_id": capture_id,
             "file_name": filename,
-            "image_path": image_path,
-            "image_url": image_url
+            "preview_data_url": f"data:image/jpeg;base64,{preview}",
         })
     except Exception as e:
         log.error("/camera/capture failed: %s", e)

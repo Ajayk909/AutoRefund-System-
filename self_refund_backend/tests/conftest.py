@@ -10,7 +10,7 @@ database - all tables in it are dropped and recreated.
 """
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -81,6 +81,24 @@ def _seed():
                         quantity=1, price_at_purchase=Decimal("2.99")),
         TransactionItem(transaction_id=t.transaction_id, product_id=p2.product_id,
                         quantity=1, price_at_purchase=Decimal("3.49")),
+    ])
+    # Receipt with quantity 3 of one product (quantity-aware returns).
+    p4 = Product(barcode="444444", name="Yogurt Cup", category="Dairy",
+                 expected_weight_grams=Decimal("100.00"),
+                 weight_tolerance_percent=Decimal("10.00"), price=Decimal("1.25"))
+    db.session.add(p4)
+    db.session.flush()
+    multi = Transaction(receipt_number="RCP-2002", purchase_date=datetime.utcnow(),
+                        payment_method="Card", total_amount=Decimal("3.75"))
+    old = Transaction(receipt_number="RCP-OLD", purchase_date=datetime.utcnow() - timedelta(days=45),
+                      payment_method="Cash", total_amount=Decimal("2.99"))
+    db.session.add_all([multi, old])
+    db.session.flush()
+    db.session.add_all([
+        TransactionItem(transaction_id=multi.transaction_id, product_id=p4.product_id,
+                        quantity=3, price_at_purchase=Decimal("1.25")),
+        TransactionItem(transaction_id=old.transaction_id, product_id=p1.product_id,
+                        quantity=1, price_at_purchase=Decimal("2.99")),
     ])
     db.session.add(Staff(username="admin1",
                          password_hash=generate_password_hash("admin123"),

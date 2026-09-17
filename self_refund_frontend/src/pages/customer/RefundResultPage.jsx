@@ -88,14 +88,14 @@ function RefundResultPage() {
               <div className="rr2-hero-eyebrow" style={{ color: accent }}>{approved ? "🎉 Refund Approved!" : "⏳ Under Review"}</div>
               <h1 className="rr2-hero-title">{approved ? "You're all set!" : "Almost there"}</h1>
               <p className="rr2-hero-subtitle">
-                {approved ? "Your refund has been automatically approved and is on its way back to you." : "Your refund request has been submitted and is waiting for a quick staff review."}
+                {approved ? "Your return has been approved. Your refund will be issued to your original payment method." : "Your return has been submitted and is waiting for a quick employee review."}
               </p>
             </div>
             <div className="rr2-amount-card" style={{ borderColor: `${accent}30`, background: `${accent}09` }}>
               <div className="rr2-amount-label">Refund Amount</div>
               <div className="rr2-amount-val" style={{ color: accent }}>${result.refund_amount}</div>
               <div className="rr2-amount-status" style={{ background: `${accent}14`, color: accent, borderColor: `${accent}28` }}>
-                {approved ? "✓ Processing" : "⏳ Pending review"}
+                {approved ? "✓ Approved" : "⏳ Pending review"}
               </div>
             </div>
           </div>
