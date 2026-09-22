@@ -143,6 +143,25 @@ data "aws_iam_policy_document" "deploy_permissions" {
     ]
     resources = ["*"]
   }
+  statement {
+    sid = "VerifyDeploymentViaAlb"
+    # deploy-dev.yml verifies the deployment through the AWS API (ECS
+    # deployment rolloutState + ALB target group health) instead of an
+    # HTTP request to https://api-dev.autorefundkiosk.online - the ALB's
+    # security group deliberately only allows traffic from the developer's
+    # own IP (allowed_ingress_cidrs), not the internet, so a GitHub-hosted
+    # runner can never reach it directly and a curl-based check would
+    # always time out there regardless of whether the deployment is
+    # healthy. elasticloadbalancing:DescribeTargetGroups and
+    # DescribeTargetHealth don't support resource-level permissions in IAM
+    # either (same as the EC2 describes above) - Resource = "*" is
+    # required. Read-only Describe* actions only.
+    actions = [
+      "elasticloadbalancing:DescribeTargetGroups",
+      "elasticloadbalancing:DescribeTargetHealth",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "deploy" {

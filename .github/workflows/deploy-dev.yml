@@ -55,25 +55,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # TEMPORARY DEBUG STEP - remove once the OIDC assume-role failure is
-      # resolved. Requests this job's own OIDC token directly (the same way
-      # aws-actions/configure-aws-credentials does internally) and prints
-      # only the decoded sub/aud/repository claims - never the token itself,
-      # which is a bearer credential.
-      - name: "DEBUG: print the OIDC token's sub/aud/repository claims"
-        run: |
-          set -euo pipefail
-          RAW=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
-          TOKEN=$(echo "$RAW" | jq -r '.value')
-          PAYLOAD=$(echo "$TOKEN" | cut -d '.' -f2 | tr '_-' '/+')
-          case $(( ${#PAYLOAD} % 4 )) in
-            2) PAYLOAD="${PAYLOAD}==";;
-            3) PAYLOAD="${PAYLOAD}=";;
-          esac
-          echo "$PAYLOAD" | base64 -d | jq '{sub, aud, repository}'
-          unset RAW TOKEN PAYLOAD
-
       - name: Assume the deploy role via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -153,11 +134,32 @@ jobs:
             --task-definition "$NEW_TASK_DEF_ARN" --force-new-deployment
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
 
-      - name: Verify the health endpoint
+      - name: Verify the deployment (ECS rollout + ALB target health)
+        # Not a curl request to https://api-dev.autorefundkiosk.online: the
+        # ALB's security group deliberately only allows the developer's own
+        # IP (allowed_ingress_cidrs in terraform.tfvars), not the internet,
+        # so a GitHub-hosted runner can never reach it - that's expected,
+        # not something to open up just so this step can use HTTP. Verify
+        # through the AWS API instead, which the deploy role can always
+        # reach regardless of the ALB's network ingress rules.
         run: |
           set -euo pipefail
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api-dev.autorefundkiosk.online/api/health)
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Health check returned $STATUS, expected 200." >&2
+          ROLLOUT_STATE=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query "services[0].deployments[?status=='PRIMARY'].rolloutState | [0]" --output text)
+          if [ "$ROLLOUT_STATE" != "COMPLETED" ]; then
+            echo "::error::ECS deployment rolloutState is $ROLLOUT_STATE, expected COMPLETED." >&2
+            exit 1
+          fi
+
+          # The ALB target group's name matches ECS_SERVICE by Terraform's
+          # naming convention (both "<project>-<environment>-core-api"), not
+          # because one is derived from the other - see
+          # modules/alb_https/main.tf's aws_lb_target_group.core_api.
+          TG_ARN=$(aws elbv2 describe-target-groups --names "$ECS_SERVICE" \
+            --query "TargetGroups[0].TargetGroupArn" --output text)
+          UNHEALTHY=$(aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
+            --query "TargetHealthDescriptions[?TargetHealth.State!='healthy']" --output json)
+          if [ "$UNHEALTHY" != "[]" ]; then
+            echo "::error::ALB target group has unhealthy target(s): $UNHEALTHY" >&2
             exit 1
           fi
