@@ -28,7 +28,23 @@ data "aws_iam_policy_document" "deploy_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:ref:refs/heads/${var.github_branch}"]
+      # The deploy job in .github/workflows/deploy-dev.yml declares
+      # `environment: dev`, which changes the OIDC token's sub claim from
+      # the ref-based form (repo:<repo>:ref:refs/heads/<branch>) to the
+      # environment-based form (repo:<repo>:environment:<environment>) -
+      # this is GitHub's documented behavior, not a workaround. The trust
+      # policy must match that exact form, hence "environment:${var.environment}"
+      # here instead of a ref/branch condition.
+      #
+      # Because this condition no longer names a branch at all, the only
+      # thing stopping a workflow run from any branch (or a fork) from
+      # minting a token with this same sub and assuming this role is the
+      # GitHub *environment's own protection rules*. The "dev" environment
+      # in GitHub repo settings is branch-restricted to main (Settings ->
+      # Environments -> dev -> Deployment branches and tags -> "Selected
+      # branches" -> main only) - without that restriction in place, this
+      # condition alone would not be a branch restriction.
+      values = ["repo:${var.github_repo}:environment:${var.environment}"]
     }
   }
 }
