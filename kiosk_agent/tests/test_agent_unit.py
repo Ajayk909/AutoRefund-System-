@@ -7,7 +7,7 @@ import requests
 
 from agent import captures
 from agent.core_client import CoreApiClient, CoreUnavailable, RequestsTransport
-from agent.identity import DevelopmentKeyIdentity
+from agent.identity import DevelopmentKeyIdentity, StagingKeyIdentity, identity_from_config
 from agent.store import AgentStore, now
 
 RETURN = ("POST", "/api/kiosk/returns")
@@ -50,6 +50,30 @@ def test_identity_never_prints_its_key():
     assert "secret" not in repr(identity)
     assert identity.auth_headers() == {"Authorization": "AutoRefund-Dev-Key ardev_secret-value"}
     assert DevelopmentKeyIdentity("KIOSK-001", "").configured is False
+
+
+def test_staging_key_identity_never_prints_its_key():
+    identity = StagingKeyIdentity("KIOSK-001", "arstg_secret-value")
+    assert "secret" not in repr(identity)
+    assert identity.auth_headers() == {"Authorization": "AutoRefund-Staging-Key arstg_secret-value"}
+    assert StagingKeyIdentity("KIOSK-001", "").configured is False
+
+
+@pytest.mark.parametrize("key,expected_type,expected_scheme", [
+    ("arstg_cloud-key", StagingKeyIdentity, "AutoRefund-Staging-Key"),
+    ("ardev_local-key", DevelopmentKeyIdentity, "AutoRefund-Dev-Key"),
+])
+def test_identity_from_config_picks_scheme_from_key_prefix(key, expected_type, expected_scheme):
+    identity = identity_from_config({"KIOSK_ID": "KIOSK-001", "KIOSK_DEV_KEY": key})
+    assert isinstance(identity, expected_type)
+    assert identity.auth_headers()["Authorization"] == f"{expected_scheme} {key}"
+
+
+@pytest.mark.parametrize("key", ["", "garbage-no-prefix", "ardev", "arstg"])
+def test_identity_from_config_never_guesses_an_unknown_or_empty_key(key):
+    identity = identity_from_config({"KIOSK_ID": "KIOSK-001", "KIOSK_DEV_KEY": key})
+    assert identity.configured is False
+    assert identity.auth_headers() == {}
 
 
 # --- submission safety -----------------------------------------------------------------

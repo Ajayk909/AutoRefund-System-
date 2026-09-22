@@ -35,10 +35,15 @@ Confirmed nothing billable remains in `ca-central-1`:
 state): IAM user `autorefund-dev`, its `AdministratorAccess` policy, the
 budget `autorefund-monthly-25`.
 
-**Left dangling, harmless but needs redoing** (outside Terraform/AWS
-entirely): the two Namecheap CNAME records (ACM validation, and `api-dev`
--> the now-deleted ALB) still exist at Namecheap pointing at nothing. They
-cost nothing but must be replaced - see the restart sequence.
+**Left dangling, harmless, may or may not need redoing** (outside
+Terraform/AWS entirely): the two Namecheap CNAME records (ACM validation,
+and `api-dev` -> the now-deleted ALB) still exist at Namecheap. The
+`api-dev` one definitely points at nothing now and needs replacing once a
+new ALB exists. The ACM validation one is **not guaranteed to be stale** -
+on the 2026-09-22 restart, the new certificate asked for the exact same
+validation record that was already sitting there from before destroy, so
+nothing needed to change. Always check the live record first - see the
+restart sequence's step 1.
 
 ## Saturday restart sequence
 
@@ -62,18 +67,28 @@ terraform apply -target "module.alb_https.aws_acm_certificate.this"
 terraform output acm_validation_record_fqdn
 terraform output acm_validation_record_value
 ```
-This is a **brand-new certificate** - the validation CNAME name will be
-**different from last time**. Do not reuse the old Namecheap record.
-
-**2. Namecheap CNAME #1 (ACM validation):**
-Host = the `acm_validation_record_fqdn` output with the trailing
-`.autorefundkiosk.online.` removed; Value = `acm_validation_record_value`
-(trailing dot removed); Type = CNAME; TTL = Automatic. Wait for it to
-resolve, then confirm:
+This is a **brand-new certificate object**, but the validation CNAME name/
+value is **not guaranteed to differ from last time** - ACM appears to
+derive it deterministically per domain/account, so a fresh cert request
+for the same domain can come back asking for the exact same record that's
+still sitting at Namecheap from before dev was destroyed. **Always check
+the live record before touching Namecheap**, don't assume you need a new
+one:
 ```powershell
-aws acm describe-certificate --certificate-arn <acm_certificate_arn output> --query Certificate.Status
+aws acm describe-certificate --certificate-arn <acm_certificate_arn output> --query "Certificate.{Status:Status,DomainValidationOptions:DomainValidationOptions}"
+nslookup -type=CNAME <ResourceRecord.Name from above> 8.8.8.8
 ```
-Proceed only once this prints `ISSUED`.
+If the `nslookup` result already matches `ResourceRecord.Value` and
+`Status` already shows `ISSUED`, the existing Namecheap entry is still
+valid - skip step 2 entirely and go straight to step 3.
+
+**2. Namecheap CNAME #1 (ACM validation) - only if the check above shows a mismatch:**
+Host = the `acm_validation_record_fqdn` output (or `ResourceRecord.Name`)
+with the trailing `.autorefundkiosk.online.` removed; Value =
+`acm_validation_record_value` (or `ResourceRecord.Value`, trailing dot
+removed); Type = CNAME; TTL = Automatic. Wait for it to resolve, then
+confirm `Status` prints `ISSUED` via the same `describe-certificate`
+command above before proceeding.
 
 **3. Full apply (everything else):**
 ```powershell
