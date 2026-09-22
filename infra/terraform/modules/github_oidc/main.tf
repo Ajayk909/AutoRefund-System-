@@ -125,6 +125,24 @@ data "aws_iam_policy_document" "deploy_permissions" {
     actions   = ["iam:PassRole"]
     resources = [var.execution_role_arn, var.task_role_arn, var.oneoff_task_role_arn]
   }
+  statement {
+    sid = "DescribeNetworkForOneOffTasks"
+    # deploy-dev.yml looks up the current public subnets and ECS task
+    # security group by tag/name before every RunTask call, since those
+    # AWS-assigned IDs change whenever dev is destroyed and recreated (see
+    # docs/phase3-status.md). ec2:DescribeSubnets and
+    # ec2:DescribeSecurityGroups do not support resource-level permissions
+    # in IAM at all - AWS requires Resource = "*" for them, there is no ARN
+    # or condition that scopes a Describe* call to one VPC's subnets/SGs.
+    # Read-only, account-wide describes are the deliberate tradeoff here;
+    # keep this statement to Describe* actions only, never add anything
+    # that creates, modifies or deletes EC2 resources.
+    actions = [
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "deploy" {
