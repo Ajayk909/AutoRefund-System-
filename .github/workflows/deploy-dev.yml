@@ -16,9 +16,11 @@ name: Deploy dev
 # in docs/phase3-status.md), then re-run this workflow (push again, or
 # Actions -> Deploy dev -> Run workflow).
 #
-# Manual dispatch note: the trust policy only accepts tokens whose ref is
-# refs/heads/main, so dispatching from any other branch will also fail at
-# the same step, by design.
+# Manual dispatch note: the trust policy matches the environment-scoped sub
+# (repo:<repo>:environment:dev), which GitHub only issues because the deploy
+# job below declares `environment: dev` - dispatching a workflow that can't
+# use the "dev" environment (e.g. its branch restriction blocks the ref)
+# will fail at the same step, by design.
 on:
   push:
     branches: [main]
@@ -52,6 +54,25 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      # TEMPORARY DEBUG STEP - remove once the OIDC assume-role failure is
+      # resolved. Requests this job's own OIDC token directly (the same way
+      # aws-actions/configure-aws-credentials does internally) and prints
+      # only the decoded sub/aud/repository claims - never the token itself,
+      # which is a bearer credential.
+      - name: "DEBUG: print the OIDC token's sub/aud/repository claims"
+        run: |
+          set -euo pipefail
+          RAW=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          TOKEN=$(echo "$RAW" | jq -r '.value')
+          PAYLOAD=$(echo "$TOKEN" | cut -d '.' -f2 | tr '_-' '/+')
+          case $(( ${#PAYLOAD} % 4 )) in
+            2) PAYLOAD="${PAYLOAD}==";;
+            3) PAYLOAD="${PAYLOAD}=";;
+          esac
+          echo "$PAYLOAD" | base64 -d | jq '{sub, aud, repository}'
+          unset RAW TOKEN PAYLOAD
 
       - name: Assume the deploy role via OIDC
         uses: aws-actions/configure-aws-credentials@v4
