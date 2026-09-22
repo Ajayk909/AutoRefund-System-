@@ -1,3 +1,8 @@
+locals {
+  github_repo_owner_name = split("/", var.github_repo)[0]
+  github_repo_name       = split("/", var.github_repo)[1]
+}
+
 resource "aws_iam_openid_connect_provider" "github" {
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
@@ -32,9 +37,16 @@ data "aws_iam_policy_document" "deploy_assume" {
       # `environment: dev`, which changes the OIDC token's sub claim from
       # the ref-based form (repo:<repo>:ref:refs/heads/<branch>) to the
       # environment-based form (repo:<repo>:environment:<environment>) -
-      # this is GitHub's documented behavior, not a workaround. The trust
-      # policy must match that exact form, hence "environment:${var.environment}"
-      # here instead of a ref/branch condition.
+      # this is GitHub's documented behavior, not a workaround.
+      #
+      # This repo was created after 2026-07-15, so GitHub also issues the
+      # newer "immutable subject claims" form: owner and repo are identified
+      # by their permanent numeric IDs, not just their current names -
+      #   repo:Ajayk909@181901779/AutoRefund-System-@1374040071:environment:dev
+      # not the older repo:Ajayk909/AutoRefund-System-:environment:dev form
+      # that most tutorials (and our own first attempt) still show. See
+      # https://docs.github.com/en/actions/reference/security/oidc
+      # var.github_repo_owner_id / var.github_repo_id hold those two IDs.
       #
       # Because this condition no longer names a branch at all, the only
       # thing stopping a workflow run from any branch (or a fork) from
@@ -44,7 +56,7 @@ data "aws_iam_policy_document" "deploy_assume" {
       # Environments -> dev -> Deployment branches and tags -> "Selected
       # branches" -> main only) - without that restriction in place, this
       # condition alone would not be a branch restriction.
-      values = ["repo:${var.github_repo}:environment:${var.environment}"]
+      values = ["repo:${local.github_repo_owner_name}@${var.github_repo_owner_id}/${local.github_repo_name}@${var.github_repo_id}:environment:${var.environment}"]
     }
   }
 }

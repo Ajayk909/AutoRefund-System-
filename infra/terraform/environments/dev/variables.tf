@@ -65,6 +65,19 @@ variable "github_repo" {
   default = "Ajayk909/AutoRefund-System-"
 }
 
+# GitHub's immutable numeric IDs for the owner and this repo - see the
+# comment on the sub condition in modules/github_oidc/main.tf for why these
+# are needed (repos created after 2026-07-15 use them in the OIDC sub claim).
+variable "github_repo_owner_id" {
+  type    = string
+  default = "181901779"
+}
+
+variable "github_repo_id" {
+  type    = string
+  default = "1374040071"
+}
+
 variable "github_branch" {
   type    = string
   default = "main"

@@ -105,3 +105,58 @@ This is a real technical gate, not just documentation - see the variable's
 description in `environments/staging/variables.tf` for what else needs
 fixing (the GitHub OIDC provider collision with dev) before it should ever
 actually be applied.
+
+---
+
+## GitHub OIDC: the trust policy uses "immutable subject claims"
+
+The deploy role's trust policy (`modules/github_oidc/main.tf`,
+`aws_iam_role.deploy`) matches the OIDC token's `sub` claim as:
+
+```
+repo:Ajayk909@181901779/AutoRefund-System-@1374040071:environment:dev
+```
+
+Two things about this are easy to get wrong from older tutorials/examples,
+both discovered the hard way (deploy-dev.yml failed at "Assume the deploy
+role via OIDC" with `Not authorized to perform sts:AssumeRoleWithWebIdentity`
+until both were fixed):
+
+1. **Environment-scoped, not ref-scoped.** `deploy-dev.yml`'s `deploy` job
+   declares `environment: dev`. That alone changes the token's `sub` from
+   the ref-based form (`repo:<repo>:ref:refs/heads/<branch>`) to
+   `repo:<repo>:environment:<environment>` - GitHub's documented behavior,
+   not a bug. A trust policy still written for the ref-based form will
+   reject every token this job ever presents. Since the condition no longer
+   names a branch at all, the actual branch restriction now lives in the
+   GitHub environment's own settings: **the "dev" environment is
+   branch-restricted to `main`** (Settings -> Environments -> dev ->
+   Deployment branches and tags -> "Selected branches" -> `main` only).
+
+2. **Immutable IDs, not names.** This repository was created after
+   2026-07-15, the date GitHub switched newly-created repos to "immutable
+   subject claims": the owner and repo are identified by their permanent
+   numeric IDs (`@181901779`, `@1374040071`), not just their current
+   names. Most existing tutorials and examples (including our own first
+   attempt at this trust policy) still show the older name-only form
+   (`repo:Ajayk909/AutoRefund-System-:...`), which this repo's tokens never
+   actually send. See
+   <https://docs.github.com/en/actions/reference/security/oidc>.
+
+Where the IDs came from:
+
+```
+GET https://api.github.com/users/Ajayk909                      -> .id   (owner ID)
+GET https://api.github.com/repos/Ajayk909/AutoRefund-System-    -> .id   (repo ID)
+```
+
+Both are Terraform variables (`github_repo_owner_id`, `github_repo_id` in
+`environments/dev/variables.tf`), not hardcoded in the module, since they're
+specific to this repository/account and a staging or other environment
+would need its own values.
+
+If this repo is ever renamed (owner or repo name), these IDs don't change
+and the trust policy keeps working unmodified - that's the point of the
+immutable form. If the deploy job's `environment:` setting is ever removed,
+the trust policy would need to go back to a ref-based (or repository-scoped
+immutable) condition instead.
