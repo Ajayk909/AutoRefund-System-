@@ -1,0 +1,142 @@
+name: Deploy dev
+
+# Push to main, or manual dispatch: run the same tests as every PR, then (only
+# if they pass) build+push the image, run the migration, and deploy it to the
+# dev ECS service. This workflow only ever touches the `autorefund-dev`
+# cluster/service/ECR repo - there is no staging or production equivalent,
+# and it never runs `terraform apply` (staging stays at 0 resources via its
+# own apply_allowed guard; this file can't change that).
+#
+# --- What happens if dev has been destroyed (`terraform destroy`) ---------
+# The OIDC deploy role itself lives in dev's Terraform state, so destroying
+# dev deletes it along with everything else. The "Assume the deploy role via
+# OIDC" step below will then fail immediately (AccessDenied / role not
+# found) - before anything else runs, so this fails closed and safely.
+# This is EXPECTED, not a bug: redeploy dev first (see the restart sequence
+# in docs/phase3-status.md), then re-run this workflow (push again, or
+# Actions -> Deploy dev -> Run workflow).
+#
+# Manual dispatch note: the trust policy only accepts tokens whose ref is
+# refs/heads/main, so dispatching from any other branch will also fail at
+# the same step, by design.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ca-central-1
+  ECR_REPOSITORY: autorefund-dev-core-api
+  ECS_CLUSTER: autorefund-dev
+  ECS_SERVICE: autorefund-dev-core-api
+  ECS_TASK_FAMILY: autorefund-dev-core-api
+  # Fixed, predictable resource names from Terraform - stable across a
+  # destroy/recreate cycle because they're literal names, not AWS-assigned
+  # IDs. Only the AWS account number varies per-account, hence the repo
+  # variable instead of a hardcoded value.
+
+jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+
+  deploy:
+    name: Build, migrate, deploy
+    needs: test
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write # required to assume the deploy role via OIDC
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assume the deploy role via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/autorefund-dev-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push the image (tagged with the commit SHA)
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          set -euo pipefail
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
+          docker build -t "$IMAGE" self_refund_backend
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Register a new task definition revision with the new image
+        run: |
+          set -euo pipefail
+          aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" \
+            --query taskDefinition > current-taskdef.json
+          jq --arg IMAGE "$IMAGE" '
+            .containerDefinitions[0].image = $IMAGE
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy)
+          ' current-taskdef.json > new-taskdef.json
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://new-taskdef.json \
+            --query taskDefinition.taskDefinitionArn --output text)
+          echo "NEW_TASK_DEF_ARN=$NEW_TASK_DEF_ARN" >> "$GITHUB_ENV"
+
+      - name: Look up the current public subnets and ECS task security group
+        # Not hardcoded: these are AWS-assigned IDs that change every time
+        # dev is destroyed and recreated. Only the Name/group-name tags
+        # (fixed by Terraform) are stable, so look them up by tag every run.
+        run: |
+          set -euo pipefail
+          SUBNETS=$(aws ec2 describe-subnets \
+            --filters "Name=tag:Name,Values=autorefund-dev-public-*" \
+            --query "Subnets[].SubnetId" --output text | tr '\t' ',')
+          SG=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=autorefund-dev-ecs-tasks" \
+            --query "SecurityGroups[0].GroupId" --output text)
+          if [ -z "$SUBNETS" ] || [ -z "$SG" ] || [ "$SG" = "None" ]; then
+            echo "::error::Could not find dev's public subnets or ECS task security group. Has dev been destroyed? See docs/phase3-status.md's restart sequence." >&2
+            exit 1
+          fi
+          echo "SUBNETS=$SUBNETS" >> "$GITHUB_ENV"
+          echo "SG=$SG" >> "$GITHUB_ENV"
+
+      - name: Run the migration as a one-off task
+        run: |
+          set -euo pipefail
+          TASK_ARN=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$NEW_TASK_DEF_ARN" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"core-api","command":["alembic","upgrade","head"]}]}' \
+            --query "tasks[0].taskArn" --output text)
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN"
+          EXIT_CODE=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" \
+            --query "tasks[0].containers[0].exitCode" --output text)
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::Migration task exited with code $EXIT_CODE. Check CloudWatch log group /ecs/autorefund-dev-core-api." >&2
+            exit 1
+          fi
+
+      - name: Deploy the service onto the new image and wait for stability
+        run: |
+          set -euo pipefail
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" \
+            --task-definition "$NEW_TASK_DEF_ARN" --force-new-deployment
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+
+      - name: Verify the health endpoint
+        run: |
+          set -euo pipefail
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api-dev.autorefundkiosk.online/api/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Health check returned $STATUS, expected 200." >&2
+            exit 1
+          fi

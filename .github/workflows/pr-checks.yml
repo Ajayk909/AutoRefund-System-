@@ -1,0 +1,21 @@
+name: PR checks
+
+# Every pull request into main: backend tests, kiosk agent tests, frontend
+# build. No AWS access of any kind - enforced two ways:
+#   1. No `id-token` permission is granted anywhere in this file, so no job
+#      here can even request an OIDC token to assume the deploy role.
+#   2. Even if it could, the deploy role's trust policy (see
+#      infra/terraform/modules/github_oidc/main.tf) only accepts tokens whose
+#      `sub` claim is exactly repo:<owner>/<repo>:ref:refs/heads/main - a pull
+#      request's token has a different sub (refs/pull/<n>/merge) and would be
+#      rejected by AWS itself, independent of anything in this file.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
