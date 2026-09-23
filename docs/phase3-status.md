@@ -5,11 +5,20 @@ throughout: **Verified** (actually run/observed), **Implemented but not
 deployed** (code/config exists, correct on review, not exercised against
 real AWS), **Unable to verify** (not checked at all).
 
-Current stage: **Dev has been fully verified end-to-end once, then
-destroyed to stop costs. Dev is currently EMPTY (0 AWS resources).** The
-"Saturday restart sequence" below is the exact, ready-to-run path back to
-where this session left off. GitHub Actions workflows are still not done
-(deferred - see "What is NOT done yet").
+Current stage: **Phase 3 is complete.** The dev environment was deployed
+to AWS and verified end to end: a full return on the physical kiosk
+(scanner, DYMO scale, webcam) over HTTPS, stored in the cloud database, with
+evidence privacy verified. The GitHub Actions pipeline reached a fully
+passing run (tests, image build, migration, service update and health
+verification all green). **Dev is destroyed between sessions to control
+cost** and rebuilt from Terraform when needed. The "Saturday restart
+sequence" below is the rebuild path. After a rebuild, deploy with
+`.github/workflows/deploy-dev.yml`, which is now started manually and no
+longer runs on push to main.
+
+Everything from "What is done (Stage 3A)" onward is a **historical record**
+written before Stage 3B and the CI/CD work. It is kept as written, so its
+"not done" / "never applied" statements describe that time, not today.
 
 ## Dev is destroyed - Verified
 
@@ -260,13 +269,15 @@ all since destroyed - see "Dev is destroyed" above):
   Permanently` -> `https://api-dev.autorefundkiosk.online:443/api/health`
   (HTTP->HTTPS redirect confirmed).
 
-**Not done yet** (remaining Stage 3B steps, each needs separate approval,
-and dev needs to be restarted first per the sequence above):
+**Not done yet at that point** *(historical: all of these were completed
+later - see the current stage at the top)*. Remaining Stage 3B steps, each
+needing separate approval, with dev restarted first per the sequence above:
 issue the KIOSK-001 staging key (Stage 3C item, deferred), verify an
 evidence upload lands in S3 and is viewable only through the staff
 endpoint (no demo return was ever submitted, so nothing touched the
 evidence bucket in this cycle), add GitHub Actions workflows (PR tests +
-OIDC deploy on push to main), one real end-to-end GitHub Actions run.
+OIDC deploy to dev; planned then to run on every push to main, but
+`deploy-dev.yml` is now manual-only), one real end-to-end GitHub Actions run.
 
 **Also built, tested locally, never run against the cloud**:
 `manage_tenancy.py reset-staff-password <username> [--secret-name <name>]`
@@ -280,6 +291,11 @@ push happened, so this command has only been exercised against the local
 test database, not the cloud.
 
 ---
+
+> **Historical record - Stage 3A.** Everything from here to the end of this
+> file was written before any AWS resource existed and before the CI/CD work.
+> Its "not done", "never applied", "unable to verify" and "planned" statements
+> describe that time. For the current state, see the top of this file.
 
 ## What is done (Stage 3A)
 
@@ -448,7 +464,9 @@ alb_https,github_oidc,monitoring}` + `infra/terraform/environments/{dev,staging}
   storage < 2 GB; all notify one SNS email topic (`alarm_email` variable,
   not committed).
 - GitHub OIDC: one OIDC provider + one deploy role, trust policy limited to
-  `repo:Ajayk909/AutoRefund-System-:ref:refs/heads/main`. Permissions: ECR
+  `repo:Ajayk909/AutoRefund-System-:ref:refs/heads/main` *(superseded: the
+  policy now matches the environment-scoped, immutable-ID subject - see
+  "GitHub OIDC" in `docs/aws-deployment.md`)*. Permissions: ECR
   push, `RegisterTaskDefinition`/`DescribeTaskDefinition` (ECS does not
   support resource-level restriction on these), update/describe the dev
   service, `RunTask`/`DescribeTasks`/`ListTasks` scoped to the dev cluster,
@@ -492,6 +510,10 @@ they run out, the account is closed.** The existing budget alerts
 
 ## What is NOT done yet
 
+*Historical (Stage 3A). Stage 3B and the GitHub repo settings were done
+later. The S3 remote Terraform backend was never created: state is still
+local. See the top of this file for the current state.*
+
 - **Stage 3B (deploy dev)**: nothing has been applied. No ACM certificate
   requested, no VPC/RDS/ECS/ALB/S3/ECR created, no image pushed, no
   migration or seed task run, no GitHub Actions workflow files added yet
@@ -509,6 +531,9 @@ they run out, the account is closed.** The existing budget alerts
   environment) - to be documented and done by the user in 3B/3C.
 
 ## Unable to verify in this stage (by design - needs 3B)
+
+*Historical (Stage 3A). See the top of this file for what was later
+verified against real AWS.*
 
 - Anything requiring a real AWS resource: ACM validation over real DNS, ALB
   reachability, ECS task actually pulling the image and passing its health
