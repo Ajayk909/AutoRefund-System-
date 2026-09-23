@@ -157,9 +157,30 @@ jobs:
           # modules/alb_https/main.tf's aws_lb_target_group.core_api.
           TG_ARN=$(aws elbv2 describe-target-groups --names "$ECS_SERVICE" \
             --query "TargetGroups[0].TargetGroupArn" --output text)
-          UNHEALTHY=$(aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
-            --query "TargetHealthDescriptions[?TargetHealth.State!='healthy']" --output json)
-          if [ "$UNHEALTHY" != "[]" ]; then
-            echo "::error::ALB target group has unhealthy target(s): $UNHEALTHY" >&2
-            exit 1
-          fi
+
+          # During a rolling deployment the old task's target normally sits
+          # in "draining" (and briefly "unused" once fully deregistered)
+          # while the new task's target comes up - that's expected, not a
+          # failure, so those states are ignored entirely. A target still
+          # in "initial" just hasn't passed its first health check yet, so
+          # poll for up to 2 minutes rather than failing immediately. The
+          # only real failure signals are an explicit "unhealthy" target, or
+          # never reaching at least one "healthy" target in that time.
+          for i in $(seq 1 24); do
+            STATES=$(aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
+              --query "TargetHealthDescriptions[*].TargetHealth.State" --output json)
+            UNHEALTHY_COUNT=$(echo "$STATES" | jq '[.[] | select(. == "unhealthy")] | length')
+            HEALTHY_COUNT=$(echo "$STATES" | jq '[.[] | select(. == "healthy")] | length')
+            if [ "$UNHEALTHY_COUNT" -gt 0 ]; then
+              echo "::error::ALB target group has $UNHEALTHY_COUNT unhealthy target(s). States: $STATES" >&2
+              exit 1
+            fi
+            if [ "$HEALTHY_COUNT" -gt 0 ]; then
+              echo "At least one healthy target. States: $STATES"
+              exit 0
+            fi
+            echo "No healthy target yet (states: $STATES), waiting..."
+            sleep 5
+          done
+          echo "::error::No healthy target after 2 minutes. Last observed states: $STATES" >&2
+          exit 1
