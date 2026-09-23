@@ -120,8 +120,28 @@ jobs:
             --overrides '{"containerOverrides":[{"name":"core-api","command":["alembic","upgrade","head"]}]}' \
             --query "tasks[0].taskArn" --output text)
           aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN"
-          EXIT_CODE=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" \
-            --query "tasks[0].containers[0].exitCode" --output text)
+
+          # `tasks-stopped` waits for lastStatus == STOPPED, but the
+          # container's exitCode is a separate field that can lag a few
+          # seconds behind that transition (a documented ECS
+          # eventual-consistency gap) - poll briefly for it to actually
+          # appear rather than treating a still-missing value as a pass or
+          # a failure. Once a value shows up, decide immediately: a real
+          # non-zero exit code fails right away, no further retry.
+          EXIT_CODE=""
+          for i in $(seq 1 12); do
+            EXIT_CODE=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" \
+              --query "tasks[0].containers[0].exitCode" --output text)
+            if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "None" ]; then
+              break
+            fi
+            echo "exitCode not reported yet, waiting..."
+            sleep 5
+          done
+          if [ -z "$EXIT_CODE" ] || [ "$EXIT_CODE" = "None" ]; then
+            echo "::error::Migration task never reported an exitCode after 1 minute. Check CloudWatch log group /ecs/autorefund-dev-core-api." >&2
+            exit 1
+          fi
           if [ "$EXIT_CODE" != "0" ]; then
             echo "::error::Migration task exited with code $EXIT_CODE. Check CloudWatch log group /ecs/autorefund-dev-core-api." >&2
             exit 1
