@@ -1,6 +1,6 @@
 # AutoRefund architecture
 
-This document explains how the code is organised today (after **Phase 1**)
+This document explains how the code is organised today (after **Phase 3**)
 and where it is heading. It is written for the development team: read it
 before changing the backend.
 
@@ -12,11 +12,15 @@ before changing the backend.
 |---|---|---|
 | 0 | Stabilise the Windows kiosk, fix security and business-rule problems | Done |
 | 1 | Domain structure + tenant-ready database | Done |
-| **2** | **Windows kiosk agent + Core API boundary** | **Done** |
-| 3+ | Cloud (AWS), Cognito, S3 evidence, AI verification, retailer integrations | Later |
+| 2 | Windows kiosk agent + Core API boundary | Done |
+| **3** | **Cloud (AWS) deployment, S3 evidence, CI/CD** | **Done** |
+| 4 | AI verification | Not started |
+| Later | Cognito, retailer integrations | Not started |
 
-Three programs run on the kiosk PC today. The Core API will move to the
-cloud later; the kiosk agent and the UI stay on the kiosk.
+Three programs run on the kiosk PC in local development. In the AWS dev
+environment (Phase 3) the Core API and its database run in AWS instead; the
+kiosk agent and the UI stay on the kiosk. See
+[`aws-deployment.md`](aws-deployment.md).
 
 ```
 ┌───────────────────────────────── Windows kiosk PC ─────────────────────────────────┐
@@ -35,7 +39,7 @@ cloud later; the kiosk agent and the UI stay on the kiosk.
 │          ▼ USB                                                ▼                    │
 │   webcam · DYMO M10 · (scanner types into the browser)    PostgreSQL               │
 └────────────────────────────────────────────────────────────────────────────────────┘
-          later: the Core API + PostgreSQL move to AWS behind HTTPS
+          AWS dev (Phase 3): the Core API + PostgreSQL run in AWS behind HTTPS
 ```
 
 ---
@@ -83,7 +87,8 @@ headers (e.g. a staff token) are never forwarded.
 
 ### API communication: agent → Core API
 
-HTTP to `CORE_API_URL` (today `http://127.0.0.1:5000`, later HTTPS to AWS).
+HTTP to `CORE_API_URL` (`http://127.0.0.1:5000` locally, HTTPS to AWS in the
+dev environment).
 Every call carries the kiosk credential.
 
 | Method | Path | Purpose |
@@ -132,8 +137,8 @@ core : DeviceAuthenticator ──► DevelopmentKeyAuthenticator (kiosk_credenti
 
 It is a bearer secret over localhost HTTP, stored in a plain `.env` file, with
 no enrollment, rotation or hardware binding. That is acceptable only because
-everything runs on one PC. Production replaces both classes (see "When AWS
-arrives"); the rest of the code does not change.
+everything runs on one PC. Production replaces both classes (see "Moving to
+AWS"); the rest of the code does not change.
 
 ### Local SQLite store (kiosk agent)
 
@@ -183,17 +188,17 @@ offline. `/api/outbox/reconcile` only asks the Core API what happened.
 * Core API, PostgreSQL and evidence folder on the kiosk PC
 * employee screens served from the kiosk UI build
 
-### When AWS arrives (later phases)
+### Moving to AWS (Phase 3 and later)
 
-| Today | Later |
-|---|---|
-| `CORE_API_URL=http://127.0.0.1:5000` | HTTPS endpoint in AWS (load balancer + WAF) |
-| Development key in `.env` | `EnrolledDeviceIdentity`: key pair in the Windows key store, one-time enrollment code, short-lived tokens, revocation |
-| `DevelopmentKeyAuthenticator` | token/certificate authenticator; development mode disabled |
-| Evidence in `captures\` | S3 (the agent's upload stays the same shape; storage module changes) |
-| PostgreSQL on the kiosk | RDS |
-| Staff login in the Core API | Cognito |
-| Staff screens in the kiosk UI | separate staff portal |
+| Local development | Target | Status (AWS dev environment) |
+|---|---|---|
+| `CORE_API_URL=http://127.0.0.1:5000` | HTTPS endpoint in AWS (load balancer + WAF) | HTTPS load balancer done; no WAF yet |
+| Development key in `.env` | `EnrolledDeviceIdentity`: key pair in the Windows key store, one-time enrollment code, short-lived tokens, revocation | Not done; dev uses interim staging keys (`arstg_`, `StagingKeyIdentity`) |
+| `DevelopmentKeyAuthenticator` | token/certificate authenticator; development mode disabled | Not done; dev uses `StagingKeyAuthenticator` (`DEVICE_AUTH_MODE=staging-key`, HTTPS only) |
+| Evidence in `captures\` | S3 (the agent's upload stays the same shape; storage module changes) | Done (`EVIDENCE_BACKEND=s3`) |
+| PostgreSQL on the kiosk | RDS | Done |
+| Staff login in the Core API | Cognito | Not done |
+| Staff screens in the kiosk UI | separate staff portal | Not done |
 
 The agent's UI endpoints, the outbox and the Core API's return rules stay.
 
@@ -355,7 +360,7 @@ Retailer OTHER: barcode 111111 → Other Retailer Soda      (allowed)
 Retailer DEMO : barcode 111111 → anything else            (refused)
 ```
 
-Retailer integrations (Phase 8) will map a retailer's catalog feed into these
+Retailer integrations (a later phase) will map a retailer's catalog feed into these
 tables through an adapter; nothing is Walmart- or retailer-specific.
 
 ### Kiosk identity
@@ -375,7 +380,7 @@ python manage_tenancy.py issue-dev-key KIOSK-002 --write-env ..\kiosk_agent\.env
 A staff member belongs to one retailer. `staff.store_id` empty = all stores
 of that retailer; set = only that store. Usernames stay globally unique so
 login needs no retailer field. Full role assignments (several stores,
-regions, roles per scope) come with Cognito in Phase 4.
+regions, roles per scope) come with Cognito in a later phase.
 
 ---
 
@@ -399,7 +404,7 @@ regions, roles per scope) come with Cognito in Phase 4.
 
 Status note: returns are verified synchronously today, so the conceptual
 *verifying* step has no stored status. It will become a stored state when
-AI verification runs asynchronously (Phase 6/7).
+AI verification runs asynchronously (Phase 4).
 
 ---
 
@@ -446,8 +451,8 @@ receipt number, because Phase 0 cannot store that.
 | PostgreSQL Row-Level Security | App scoping + composite FKs cover today's single app | Cloud phase |
 | Renaming `refunds` → `returns` | Rename churn with no functional gain | Possibly with the cloud API |
 | Production kiosk enrollment, key pairs, token rotation | Needs a real deployment target and PKI decisions | With the cloud API |
-| HTTPS between agent and Core API | Both on one PC today | With the cloud API |
+| HTTPS between agent and Core API | Both on one PC in local development | Done for the AWS dev environment (staging keys require HTTPS) |
 | Automatic outbox re-sending | Would act without the customer present | Not planned for returns |
 | Moving all UI flow state into the agent | Screens still keep display data in localStorage (no personal data) | When the UI is reworked |
 | Heartbeats / fleet monitoring | Only `/api/kiosk/status` locally | Monitoring phase |
-| AWS, AI, POS, payments | Out of scope | Later phases |
+| AI, POS, payments | Out of scope so far | Phase 4 (AI); later (POS, payments) |
