@@ -353,8 +353,8 @@ given one later, because all code already works through a tenant context.
    code has a bug. A return's kiosk must belong to the return's store.
 
 PostgreSQL Row-Level Security is **not** used yet. It adds most value once
-several services or reporting users connect directly to the database (cloud
-phases); the schema is ready for it.
+several services or reporting users connect directly to the database; the
+schema is ready for it.
 
 ### Products and identifiers
 
