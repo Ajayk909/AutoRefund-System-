@@ -91,7 +91,7 @@ Three programs run on the kiosk PC. **Read [`docs/architecture.md`](docs/archite
 | `push-to-github.bat` | One-time: turns the original capstone folder into this Git repository and pushes it (no force-push) |
 | `self_refund_backend/Dockerfile` | Core API container image, used for the AWS deployment (see [section 13](#13-running-the-core-api-in-docker)) |
 | `infra/terraform/` | Terraform modules and the `dev` / `staging` environments for AWS (see [section 14](#14-aws-deployment-and-github-actions)) |
-| `.github/workflows/` | GitHub Actions: tests on every pull request, deploy to AWS dev on push to `main` |
+| `.github/workflows/` | GitHub Actions: tests on every pull request and every push to `main`; deploy to AWS dev started manually |
 | `docs/aws-deployment.md`, `docs/phase3-status.md` | AWS deployment reference and Phase 3 record |
 
 **Tenants**: data is organised as **Retailer → (optional store groups) → Store → Kiosk**. All retailers share one database; every tenant-owned row carries `retailer_id`, and composite foreign keys stop data of two retailers from being linked. Barcodes and receipt numbers are unique **per retailer**.
@@ -588,11 +588,11 @@ The full procedure (apply, DNS and certificate, image push, migration, seed, des
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `tests.yml` | called by the two below | backend tests against a PostgreSQL 16 service (both test databases, so nothing is skipped), kiosk agent tests, frontend build. No AWS access |
+| `tests.yml` | every push to `main`; also called by the two below | backend tests against a PostgreSQL 16 service (both test databases, so nothing is skipped), kiosk agent tests, frontend build. No AWS access |
 | `pr-checks.yml` | every pull request into `main` | runs `tests.yml`. No AWS access |
-| `deploy-dev.yml` | push to `main`, or manual run | runs `tests.yml`; only if it passes: builds and pushes the image to ECR (tagged with the commit SHA), runs `alembic upgrade head` as a one-off ECS task, updates the ECS service, then verifies the rollout and load balancer target health through the AWS API |
+| `deploy-dev.yml` | manual only (Actions → Deploy dev → Run workflow) | runs `tests.yml`; only if it passes: builds and pushes the image to ECR (tagged with the commit SHA), runs `alembic upgrade head` as a one-off ECS task, updates the ECS service, then verifies the rollout and load balancer target health through the AWS API |
 
-The deploy job signs in to AWS with **GitHub OIDC** (no stored AWS keys). It runs in the `dev` GitHub environment, which is restricted to `main`, and needs the repository variable `AWS_ACCOUNT_ID`. If dev has been destroyed, the deploy fails safely at the first AWS step. Rebuild dev first, then re-run the workflow.
+The deploy job signs in to AWS with **GitHub OIDC** (no stored AWS keys). It runs in the `dev` GitHub environment, which is restricted to `main`, and needs the repository variable `AWS_ACCOUNT_ID`. Dev is destroyed between sessions to control cost, so deploying is a deliberate manual step taken after rebuilding dev, not something that happens on every push. If dev has been destroyed, the deploy fails safely at the first AWS step. Rebuild dev first, then run the workflow.
 
 ## 15. Documentation
 

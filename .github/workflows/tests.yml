@@ -1,11 +1,14 @@
 name: Tests
 
-# Reusable workflow: backend tests, kiosk agent tests, frontend build.
-# Called by pr-checks.yml (every PR) and deploy-dev.yml (before every deploy).
-# Deliberately has no AWS access of any kind - no id-token permission, no AWS
-# CLI calls, nothing that could touch the cloud. See pr-checks.yml for why
+# Backend tests, kiosk agent tests, frontend build.
+# Runs on every push to main, and is called by pr-checks.yml (every PR) and
+# deploy-dev.yml (before every manual deploy). Deliberately has no AWS
+# access of any kind - no id-token permission, no AWS CLI calls, nothing
+# that could touch the cloud. See pr-checks.yml for why
 # that's also enforced independently of this file.
 on:
+  push:
+    branches: [main]
   workflow_call:
 
 permissions:

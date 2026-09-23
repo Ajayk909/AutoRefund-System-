@@ -1,8 +1,18 @@
 name: Deploy dev
 
-# Push to main, or manual dispatch: run the same tests as every PR, then (only
-# if they pass) build+push the image, run the migration, and deploy it to the
-# dev ECS service. This workflow only ever touches the `autorefund-dev`
+# Manual dispatch only (Actions -> Deploy dev -> Run workflow): run the same
+# tests as every PR, then (only if they pass) build+push the image, run the
+# migration, and deploy it to the dev ECS service.
+#
+# --- Why this is not triggered by a push to main -------------------------
+# Dev is destroyed between work sessions to control cost (see "Destroy dev /
+# stop costs" in docs/aws-deployment.md). While it is destroyed, a deploy can
+# only fail, so running one on every push would turn main red on every push
+# and teach everyone to ignore CI failures. Deploying is a deliberate manual
+# step taken after rebuilding dev. Pushes to main still run the full test
+# suite: tests.yml has its own push trigger.
+#
+# This workflow only ever touches the `autorefund-dev`
 # cluster/service/ECR repo - there is no staging or production equivalent,
 # and it never runs `terraform apply` (staging stays at 0 resources via its
 # own apply_allowed guard; this file can't change that).
@@ -13,8 +23,8 @@ name: Deploy dev
 # OIDC" step below will then fail immediately (AccessDenied / role not
 # found) - before anything else runs, so this fails closed and safely.
 # This is EXPECTED, not a bug: redeploy dev first (see the restart sequence
-# in docs/phase3-status.md), then re-run this workflow (push again, or
-# Actions -> Deploy dev -> Run workflow).
+# in docs/phase3-status.md), then run this workflow again (Actions ->
+# Deploy dev -> Run workflow).
 #
 # Manual dispatch note: the trust policy matches the environment-scoped sub
 # (repo:<repo>:environment:dev), which GitHub only issues because the deploy
@@ -22,8 +32,6 @@ name: Deploy dev
 # use the "dev" environment (e.g. its branch restriction blocks the ref)
 # will fail at the same step, by design.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
