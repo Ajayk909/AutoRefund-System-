@@ -6,9 +6,13 @@ name: PR checks
 #      here can even request an OIDC token to assume the deploy role.
 #   2. Even if it could, the deploy role's trust policy (see
 #      infra/terraform/modules/github_oidc/main.tf) only accepts tokens whose
-#      `sub` claim is exactly repo:<owner>/<repo>:ref:refs/heads/main - a pull
-#      request's token has a different sub (refs/pull/<n>/merge) and would be
-#      rejected by AWS itself, independent of anything in this file.
+#      `sub` claim is the environment-scoped, immutable-ID form
+#      repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:dev. GitHub only
+#      issues that sub to a job that declares `environment: dev`; no job here
+#      does, so AWS itself would reject its token. A job that did declare it
+#      would still be blocked by the "dev" GitHub environment, which only
+#      allows deployments from main (a pull request runs on
+#      refs/pull/<n>/merge).
 on:
   pull_request:
     branches: [main]
