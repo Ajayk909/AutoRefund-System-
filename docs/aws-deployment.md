@@ -70,12 +70,15 @@ cannot touch them - they're left resolving to nothing. This costs nothing,
 but:
 - `api-dev.autorefundkiosk.online` will simply stop resolving usefully -
   that's expected, not a bug.
-- **Recreating dev needs a brand-new ACM validation CNAME every time**,
-  because each certificate request gets a unique random validation record
-  name - the old CNAME from a previous cycle will not validate a new
-  certificate. Delete the stale validation CNAME at Namecheap when you
-  notice it (optional cleanup) and add the new one from
-  `terraform output acm_validation_record_fqdn` on the next apply.
+- **Leave the ACM validation CNAME in place.** Recreating dev does not
+  necessarily need a new one: on the 2026-09-22 rebuild, the new certificate
+  asked for exactly the validation record already at Namecheap, and it
+  validated without any DNS change. Do not delete it as "stale" - that would
+  break this reuse. On the next apply, check the live record first
+  (`terraform output acm_validation_record_fqdn` / `_value` against
+  `nslookup`, as in step 1 of the restart sequence in
+  `docs/phase3-status.md`), and only add or change it at Namecheap if they
+  differ.
 
 ### 4. Double-check nothing is still running
 
