@@ -144,10 +144,29 @@ jobs:
         # reach regardless of the ALB's network ingress rules.
         run: |
           set -euo pipefail
-          ROLLOUT_STATE=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
-            --query "services[0].deployments[?status=='PRIMARY'].rolloutState | [0]" --output text)
+
+          # `aws ecs wait services-stable` above can return moments before
+          # the PRIMARY deployment's rolloutState actually flips to
+          # COMPLETED - the same kind of race as the ALB target below, not a
+          # real failure. Poll for up to 3 minutes. FAILED is a genuine
+          # failure and never gets retried; IN_PROGRESS just means check
+          # again shortly.
+          for i in $(seq 1 36); do
+            ROLLOUT_STATE=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+              --query "services[0].deployments[?status=='PRIMARY'].rolloutState | [0]" --output text)
+            if [ "$ROLLOUT_STATE" = "FAILED" ]; then
+              echo "::error::ECS deployment rolloutState is FAILED." >&2
+              exit 1
+            fi
+            if [ "$ROLLOUT_STATE" = "COMPLETED" ]; then
+              echo "Deployment rolloutState is COMPLETED."
+              break
+            fi
+            echo "rolloutState is $ROLLOUT_STATE, waiting..."
+            sleep 5
+          done
           if [ "$ROLLOUT_STATE" != "COMPLETED" ]; then
-            echo "::error::ECS deployment rolloutState is $ROLLOUT_STATE, expected COMPLETED." >&2
+            echo "::error::ECS deployment rolloutState is still $ROLLOUT_STATE after 3 minutes, expected COMPLETED." >&2
             exit 1
           fi
 
