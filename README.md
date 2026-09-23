@@ -20,6 +20,11 @@ The first prototype (Sheridan College capstone, 2026) ran on a **Raspberry Pi**.
 8. [Testing](#8-testing)
 9. [Known limitations](#9-known-limitations)
 10. [Raspberry Pi → Windows migration notes](#10-raspberry-pi--windows-migration-notes)
+11. [Project status](#11-project-status)
+12. [Managing retailers, stores and kiosks](#12-managing-retailers-stores-and-kiosks)
+13. [Running the Core API in Docker](#13-running-the-core-api-in-docker)
+14. [AWS deployment and GitHub Actions](#14-aws-deployment-and-github-actions)
+15. [Documentation](#15-documentation)
 
 ---
 
@@ -84,6 +89,10 @@ Three programs run on the kiosk PC. **Read [`docs/architecture.md`](docs/archite
 | `self_refund_backend/manage_tenancy.py` | List / add retailers, stores, kiosks; issue / revoke kiosk agent keys |
 | `docs/architecture.md` | Roles, boundary, failure behaviour, tenant model, migrations, deferred work |
 | `push-to-github.bat` | One-time: turns the original capstone folder into this Git repository and pushes it (no force-push) |
+| `self_refund_backend/Dockerfile` | Core API container image, used for the AWS deployment (see [section 13](#13-running-the-core-api-in-docker)) |
+| `infra/terraform/` | Terraform modules and the `dev` / `staging` environments for AWS (see [section 14](#14-aws-deployment-and-github-actions)) |
+| `.github/workflows/` | GitHub Actions: tests on every pull request, deploy to AWS dev on push to `main` |
+| `docs/aws-deployment.md`, `docs/phase3-status.md` | AWS deployment reference and Phase 3 record |
 
 **Tenants**: data is organised as **Retailer → (optional store groups) → Store → Kiosk**. All retailers share one database; every tenant-owned row carries `retailer_id`, and composite foreign keys stop data of two retailers from being linked. Barcodes and receipt numbers are unique **per retailer**.
 
@@ -213,7 +222,7 @@ Each program has its own `.env` (git-ignored, never commit it). See the `.env.ex
 | `FLASK_HOST` / `FLASK_PORT` | `127.0.0.1` / `5000` | must stay loopback while `DEVICE_AUTH_MODE=development` |
 | `FLASK_DEBUG` | `false` | Never `true` on a kiosk (the debugger allows remote code execution) |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | origins allowed for the employee screens |
-| `DEVICE_AUTH_MODE` | `development` | how kiosk agents authenticate (only `development` exists) |
+| `DEVICE_AUTH_MODE` | `development` | how kiosk agents authenticate (`development` locally; `staging-key` for cloud dev/staging only) |
 | `DEV_KEY_MAX_DAYS` | `30` | lifetime of a kiosk agent development key |
 | `MAX_EVIDENCE_BYTES` | `5242880` | largest photo the agent may upload |
 | `RETURN_WINDOW_DAYS` | `30` | days after purchase a return is accepted |
@@ -221,6 +230,17 @@ Each program has its own `.env` (git-ignored, never commit it). See the `.env.ex
 | `REQUIRE_PHOTO_FOR_AUTO_APPROVAL` | `true` | no photo → employee review |
 | `STAFF_SESSION_HOURS` | `8` | employee login lifetime |
 | `CAPTURE_DIR` / `LOG_DIR` | `captures` / `logs` | evidence photos and logs |
+
+**Core API, cloud only**: leave these unset on the Windows kiosk PC. In AWS they are set by the ECS task definition (see [`docs/aws-deployment.md`](docs/aws-deployment.md)).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ENVIRONMENT` | `local` | `local`, `dev`, `staging` or `production`. Anything other than `local` trusts one proxy hop (the load balancer) |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | – / `5432` / `refund_kiosk` / `refund_user` / – | used only when `DATABASE_URL` is not set; in AWS the password comes from Secrets Manager |
+| `EVIDENCE_BACKEND` | `local` | `local` (files in `CAPTURE_DIR`) or `s3` (private bucket) |
+| `EVIDENCE_S3_BUCKET` / `AWS_REGION` | – | required with `EVIDENCE_BACKEND=s3` |
+| `STAGING_KEY_MAX_DAYS` | `14` | lifetime of a kiosk agent staging key (`DEVICE_AUTH_MODE=staging-key`) |
+| `SEED_ADMIN_SECRET_NAME` | `autorefund/<ENVIRONMENT>/admin-password` | Secrets Manager secret that `seed.py` writes the generated admin password to outside `local` |
 
 **Kiosk agent**: `kiosk_agent\.env`
 
@@ -244,6 +264,8 @@ Each program has its own `.env` (git-ignored, never commit it). See the `.env.ex
 | `SCALE_VENDOR_ID` / `SCALE_PRODUCT_ID` | `0x0922` / `0x8003` | USB IDs of the scale |
 | `SCALE_READ_TIMEOUT_MS` | `2000` | |
 | `MOCK_SCALE_GRAMS` | `250` | weight reported by the mock scale |
+
+`KIOSK_DEV_KEY` can also hold a cloud **staging key** (`arstg_...`, from `manage_tenancy.py issue-staging-key`). The agent picks the authentication scheme from the key's prefix (`ardev_` or `arstg_`).
 
 **Kiosk UI**: only needed if an address differs from the default. Create `self_refund_frontend\.env.local` with `VITE_API_ORIGIN=...` (Core API) and/or `VITE_AGENT_ORIGIN=...` (kiosk agent).
 
@@ -291,13 +313,45 @@ Scanners that only work in serial/COM (RS-232/USB-CDC) mode are **not** supporte
 Windows: *AutoRefund Backend*, *AutoRefund Kiosk Agent*, *AutoRefund Frontend*.
 Logs: `self_refund_backend\logs\autorefund.log` and `kiosk_agent\logs\kiosk-agent.log` (rotated at 2 MB).
 
-**Is the kiosk set up correctly?** Open <http://127.0.0.1:5100/api/kiosk/status>. `"state": "OK"` with your store and retailer means the agent's key works; `"mock": false` means real hardware.
+**Is the kiosk set up correctly?** Open <http://127.0.0.1:5100/api/kiosk/status>. `"state": "OK"` with your store and retailer means the agent's key works; `"mock": false` under `hardware.camera` and `hardware.scale` means real hardware.
 
 **Start automatically at logon (demo kiosk)**: press `Win+R`, type `shell:startup`, and put a shortcut to `start-autorefund.bat kiosk` in that folder.
 
 **Development without hardware**: set `HARDWARE_MODE=mock` in `kiosk_agent\.env`. The camera then returns a frame stamped **MOCK CAMERA**, and the scale returns `MOCK_SCALE_GRAMS`. The agent logs a warning, `/api/hardware/status` reports `"mock": true`, and the audit log records `hardware_mock`. Never process real refunds in mock mode.
 
+**Running the programs one at a time** (what `start-autorefund.bat` does, each in its own window):
+
+```bat
+REM Core API  -> http://127.0.0.1:5000/api/health
+cd self_refund_backend
+.venv\Scripts\python run.py
+
+REM Kiosk agent -> http://127.0.0.1:5100/api/health
+cd kiosk_agent
+.venv\Scripts\python run_agent.py
+
+REM Kiosk UI (dev server with hot reload) -> http://127.0.0.1:5173
+cd self_refund_frontend
+npm run dev
+```
+
+With `HARDWARE_MODE=mock`, the kiosk agent runs with no camera or scale attached. The devices are **mocked**: `/api/hardware/status` shows `"implementation": "mock-camera"` / `"mock-scale"` and `"mock": true`.
+
 ## 8. Testing
+
+> [!WARNING]
+> **Without the two test databases, 123 of the backend tests are skipped.** `python -m pytest` then reports `21 passed, 123 skipped` and exits successfully. **That does NOT mean the suite passed.** Only a run with both databases configured counts (161 passed). Create the databases once, then set both variables in the same window before running pytest:
+>
+> ```bat
+> psql -U postgres -h localhost -c "CREATE DATABASE refund_kiosk_test OWNER refund_user"
+> psql -U postgres -h localhost -c "CREATE DATABASE refund_migration_test OWNER refund_user"
+> cd self_refund_backend
+> set TEST_DATABASE_URL=postgresql://refund_user:YOUR_PASSWORD@localhost:5432/refund_kiosk_test
+> set MIGRATION_TEST_DATABASE_URL=postgresql://refund_user:YOUR_PASSWORD@localhost:5432/refund_migration_test
+> .venv\Scripts\python -m pytest
+> ```
+>
+> Both databases are dropped and recreated by the tests, so never point them at real data.
 
 **Core API tests** use a real PostgreSQL database. Kiosk requests go through a real kiosk agent with mock hardware, running in the same process (`tests/kiosk_harness.py`):
 
@@ -326,7 +380,7 @@ cd kiosk_agent
 .venv\Scripts\python -m pytest
 ```
 
-Covered scenarios (Core API 126 tests, kiosk agent 41 tests):
+Covered scenarios (Core API 161 tests, kiosk agent 48 tests):
 
 - normal return → approved, with a photo; tolerance boundary; weight mismatch → pending review
 - weight read by the kiosk agent; weight, kiosk, store or retailer values sent by the browser are ignored; empty/unstable scale refused; scale disconnected → no refund
@@ -348,6 +402,10 @@ Covered scenarios (Core API 126 tests, kiosk agent 41 tests):
 - **agent ↔ Core API boundary**: Core API no longer serves browser kiosk or hardware routes; returns carry the device key, not browser headers; Core API validates scale readings and JPEG evidence, stores nothing for blocked returns
 - **failure safety**: Core API down, timeout, 5xx or garbage → "nothing has been refunded", no return, outbox `unconfirmed`; retry with the same key creates exactly one return, including when the first response was lost; reconciliation never re-sends
 - **kiosk agent**: identity mismatch / disabled / not configured block everything; other web origins refused; loopback only; captures single use and expiring; local store holds no customer data; settings import never copies secrets
+- **cloud configuration** (Phase 3): `ENVIRONMENT` validation, database settings built from `DB_*`, S3 bucket required for `EVIDENCE_BACKEND=s3`, proxy headers trusted only outside `local`
+- **S3 evidence** (Phase 3, against a fake S3 client): store / read / delete round trip; JPEG and size checked before anything reaches S3; local storage stays the default; `s3` requires a bucket
+- **staging keys** (Phase 3): HTTP refused, HTTPS accepted, development keys not accepted, lifetime cap, expiry and revocation, refused at startup when `ENVIRONMENT=production`; the kiosk agent picks the key scheme from its prefix
+- **secrets never printed** (Phase 3, against a fake Secrets Manager client): `issue-staging-key` and `reset-staff-password` write to Secrets Manager without printing the value; the issued key really authenticates and the old password stops working
 
 **Frontend**
 
@@ -384,12 +442,17 @@ npm run lint
 
 | Area | Status | How |
 |---|---|---|
-| Core API rules, tenancy, device auth, agent boundary, migrations (126 tests) | PASS | pytest, PostgreSQL 16, Linux (Phase 1: 94 also passed on Windows) |
-| Kiosk agent (41 tests) | PASS | pytest, Linux, no database |
+| Core API rules, tenancy, device auth, agent boundary, migrations (161 tests) | PASS | pytest, PostgreSQL 16, Linux (Phase 1: 94 also passed on Windows) |
+| Kiosk agent (48 tests) | PASS | pytest, Linux, no database |
 | Separate Core API + kiosk agent processes, including Core API outage and retry | PASS | Linux, mock hardware |
 | Frontend production build | PASS | `vite build` |
 | Webcam, DYMO M10, pyzbar, `setup` / `init-database` / `start` scripts before Phase 2 | PASS | Windows kiosk PC (Phase 0/1) |
-| Phase 2 on the Windows kiosk PC (updated scripts, agent with real webcam/DYMO/scanner, full flows) | NOT YET TESTED | needs the kiosk PC |
+| Kiosk agent with real webcam/DYMO/scanner on the Windows kiosk PC, full return against the cloud Core API over HTTPS | PASS | physical kiosk, 22 Sept 2026 |
+| Updated `setup` / `init-database` / `start` scripts on the Windows kiosk PC (Phase 2 and later) | NOT YET TESTED | not re-run in the 22 Sept test; needs the kiosk PC |
+| Core API full suite (161 tests) on Windows | PASS | pytest, local PostgreSQL 16, Windows 11 |
+| Core API container image | PASS | `docker build`; `/api/health` answers; runs as non-root `appuser` |
+| AWS dev end to end (Phase 3) | PASS | full return on the physical kiosk over HTTPS, stored in the cloud database, evidence privacy checked |
+| GitHub Actions pipeline | PASS | tests, image build, migration, service update and health verification all green |
 
 ## 10. Raspberry Pi → Windows migration notes
 
@@ -397,7 +460,7 @@ npm run lint
 
 | Pi prototype | Windows version |
 |---|---|
-| `cv2.VideoCapture("/dev/video0", cv2.CAP_V4L2)` (V4L2 and `/dev/video*` exist only on Linux) | `hardware/camera_service.py`: numeric index with DirectShow → Media Foundation (V4L2 is still used automatically on Linux) |
+| `cv2.VideoCapture("/dev/video0", cv2.CAP_V4L2)` (V4L2 and `/dev/video*` exist only on Linux) | `kiosk_agent/hardware/camera_service.py`: numeric index with DirectShow → Media Foundation (V4L2 is still used automatically on Linux) |
 | `USBCameraService("/dev/video0")` hard-coded in `routes.py` | `CAMERA_INDEX` / `CAMERA_BACKEND` in `.env`, created through `hardware.get_camera()` |
 | Receipt barcodes read **only** by the camera (pyzbar) | Camera scanning kept, plus USB HID keyboard scanner support in the UI, plus an OpenCV decoder fallback |
 | DYMO scale through `hidapi` (Linux hidraw); VID/PID hard-coded; errors silently returned `0 g` | Same `hidapi` package (Windows HID API). VID/PID configurable. Errors are reported (`503`, "Scale not responding"). Status byte handled (zero, motion, over-weight). Signed exponent bug fixed (`>= 128`). |
@@ -406,14 +469,14 @@ npm run lint
 | DB password hard-coded in `alembic.ini` | Alembic reads `DATABASE_URL` from `.env` |
 | Linux `.venv` (`/home/aman/...`, `bin/`) | recreated by `setup-autorefund.bat`; the old one is renamed `.venv-raspberrypi-old`, not deleted |
 | `requirements.txt` missing opencv, pyzbar, hidapi, numpy | pinned, with Windows wheels verified |
-| Frontend: `127.0.0.1:5000` / `localhost:5000` / `window.location.hostname:5000` spread over 4 files | one setting, `VITE_API_ORIGIN` (`src/services/api.js`) |
+| Frontend: `127.0.0.1:5000` / `localhost:5000` / `window.location.hostname:5000` spread over 4 files | one setting, `VITE_API_ORIGIN` (`src/services/api.js`), plus `VITE_AGENT_ORIGIN` (`src/services/agent.js`) since Phase 2 |
 | Frontend sent `image_path: "mock_images/test.jpg"` when no photo was taken, and the backend stored it as if it were real evidence | sends `null`; the backend only stores paths of files that exist, and the audit log records `image_captured` |
 | `print()` debugging | rotating log file plus console; duplicate attempts, staff decisions, failed logins and hardware errors are logged |
 | `seed.py` wiped the database without asking | asks for confirmation (`--yes` to skip) |
 
 **No Raspberry Pi specifics found** for GPIO, `picamera`, serial `ttyUSB`/`ttyACM`, systemd/cron, shell scripts, or Pi IP addresses/hostnames.
 
-**Unchanged**: the database schema and migrations, the models, the refund decision rules (tolerance %, approve vs. pending, duplicate check), the API response formats, and all UI pages and styles.
+**Unchanged**: the database schema and migrations, the models, the refund decision rules (tolerance %, approve vs. pending, duplicate check), the API response formats, and all UI pages and styles. (This was true of the Pi → Windows port itself; Phases 0–2 changed the schema and models afterwards.)
 
 **Moving existing data from the Pi** (optional). The Pi's refund history lives in the Pi's PostgreSQL, not in this repository.
 
@@ -428,3 +491,115 @@ pg_restore -U refund_user -h localhost -d refund_kiosk --clean --if-exists refun
 ```
 
 Then copy the Pi's `self_refund_backend/captures/` folder into `self_refund_backend\captures\` so the evidence photos still resolve.
+
+## 11. Project status
+
+| Phase | Goal | Status |
+|---|---|---|
+| 0 | Stabilise the Windows kiosk; fix security and business-rule problems | Done |
+| 1 | Domain structure and tenant-ready database (retailer → store group → store → kiosk) | Done |
+| 2 | Windows kiosk agent and Core API boundary | Done |
+| 3 | AWS cloud deployment and CI/CD | Done (see below) |
+| 4 | AI verification of the returned item | **Not started** |
+
+**Phase 3** is complete. The dev environment was deployed to AWS and verified end to end: a full return was performed on the physical kiosk (scanner, DYMO scale, webcam) over HTTPS and stored in the cloud database, with evidence privacy verified. The GitHub Actions pipeline reached a fully passing run: tests, image build, migration, service update and health verification all green. The dev environment is destroyed between sessions to control cost and rebuilt from Terraform when needed.
+
+**Phase 4** has not started. Weight is still the only automatic check (see [Known limitations](#9-known-limitations)).
+
+## 12. Managing retailers, stores and kiosks
+
+`manage_tenancy.py` is the command-line tool for the tenant hierarchy and kiosk keys. Run it from `self_refund_backend` with the Core API's virtual environment:
+
+```bat
+cd self_refund_backend
+.venv\Scripts\python manage_tenancy.py list
+```
+
+| Command | What it does |
+|---|---|
+| `list` | prints every retailer, its stores and their kiosks (inactive kiosks are marked) |
+| `add-retailer <CODE> "<Name>"` | creates a retailer |
+| `add-store <RETAILER_CODE> <STORE_CODE> "<Name>"` | creates a store under a retailer |
+| `add-kiosk <RETAILER_CODE> <STORE_CODE> <KIOSK_CODE>` | registers a kiosk in a store |
+| `issue-dev-key <KIOSK_CODE> [--write-env <path>]` | creates a **development** key for the kiosk agent; shown once, or written into `kiosk_agent\.env` as `KIOSK_ID` / `KIOSK_DEV_KEY` |
+| `revoke-keys <KIOSK_CODE>` | revokes every key of that kiosk |
+| `issue-staging-key <KIOSK_CODE> [--secret-name <name>] [--days N]` | **cloud only**: creates a staging key and writes it straight into AWS Secrets Manager (default secret `autorefund/<ENVIRONMENT>/kiosk/<KIOSK_CODE>`); the value is never printed |
+| `reset-staff-password <USERNAME> [--secret-name <name>]` | **cloud only**: generates a new password for a staff member and writes it into Secrets Manager (default `autorefund/<ENVIRONMENT>/admin-password`); never printed. Existing sessions keep working until they expire |
+
+The two cloud-only commands need `boto3` and AWS credentials. Both are available in the Core API container (see [section 13](#13-running-the-core-api-in-docker)), where they run as one-off ECS tasks. `boto3` is not installed in the local Windows environment.
+
+Example: adding a second kiosk to the demo store and giving it a key:
+
+```bat
+.venv\Scripts\python manage_tenancy.py add-kiosk DEMO STORE-001 KIOSK-002
+.venv\Scripts\python manage_tenancy.py issue-dev-key KIOSK-002 --write-env ..\kiosk_agent\.env
+```
+
+## 13. Running the Core API in Docker
+
+The Core API has a container image for the cloud: `self_refund_backend/Dockerfile`. The Windows kiosk PC does **not** use it. Local development keeps running `run.py` with the Flask development server.
+
+| Property | Value |
+|---|---|
+| Base image | `python:3.13-slim` |
+| Server | gunicorn on port `8000` (2 workers × 4 threads), logs to stdout/stderr |
+| User | non-root `appuser` |
+| Health check | `GET /api/health` (does not touch the database) |
+| Contents | Core API code, migrations, `seed.py`, `manage_tenancy.py`. No `.env`, tests or kiosk agent code |
+| Extra packages | `requirements-docker.txt` (`gunicorn`, `boto3` on top of `requirements.txt`) |
+
+Build it and check that it starts. The database address below is a placeholder: `/api/health` answers without connecting to it.
+
+```bash
+docker build -t autorefund-core-api:local self_refund_backend
+docker run --rm -p 8000:8000 -e DATABASE_URL=postgresql://refund_user:CHANGE_ME@db.invalid:5432/refund_kiosk autorefund-core-api:local
+```
+
+Then open <http://127.0.0.1:8000/api/health>. All configuration comes from environment variables (see the cloud-only table in [section 5](#5-configuration)). Never bake secrets into the image.
+
+## 14. AWS deployment and GitHub Actions
+
+In the cloud, the Core API and its database move to AWS (`ca-central-1`). The kiosk agent and the kiosk UI stay on the kiosk PC and reach the Core API over HTTPS.
+
+```
+ Windows kiosk PC                              AWS (dev)
+┌──────────────────────┐   HTTPS    ┌────────────────────────────────────────────────┐
+│ React UI             │ ─────────► │ Application Load Balancer (ACM certificate,    │
+│ Kiosk agent          │  staging   │ ingress limited to allowed IP ranges)          │
+│  (camera, scale)     │    key     │        │                                       │
+└──────────────────────┘            │        ▼                                       │
+                                    │ ECS Fargate: Core API container                │
+                                    │        │                 │                     │
+                                    │        ▼                 ▼                     │
+                                    │ RDS PostgreSQL     S3 evidence bucket          │
+                                    │ (private subnets)  (private, encrypted)        │
+                                    │                                                │
+                                    │ Secrets Manager · CloudWatch logs and alarms   │
+                                    └────────────────────────────────────────────────┘
+```
+
+- **Infrastructure** is Terraform in `infra/terraform/` (modules plus `dev` and `staging` environments). Staging has an apply guard and creates no resources unless `apply_allowed = true` is set on purpose.
+- **Kiosk authentication** in the cloud uses staging keys (`DEVICE_AUTH_MODE=staging-key`, HTTPS only), not development keys.
+- **Cost**: dev is destroyed between work sessions and rebuilt from Terraform when needed.
+
+The full procedure (apply, DNS and certificate, image push, migration, seed, destroy, OIDC trust policy) is in **[`docs/aws-deployment.md`](docs/aws-deployment.md)** and **[`docs/phase3-status.md`](docs/phase3-status.md)**.
+
+**GitHub Actions** (`.github/workflows/`)
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `tests.yml` | called by the two below | backend tests against a PostgreSQL 16 service (both test databases, so nothing is skipped), kiosk agent tests, frontend build. No AWS access |
+| `pr-checks.yml` | every pull request into `main` | runs `tests.yml`. No AWS access |
+| `deploy-dev.yml` | push to `main`, or manual run | runs `tests.yml`; only if it passes: builds and pushes the image to ECR (tagged with the commit SHA), runs `alembic upgrade head` as a one-off ECS task, updates the ECS service, then verifies the rollout and load balancer target health through the AWS API |
+
+The deploy job signs in to AWS with **GitHub OIDC** (no stored AWS keys). It runs in the `dev` GitHub environment, which is restricted to `main`, and needs the repository variable `AWS_ACCOUNT_ID`. If dev has been destroyed, the deploy fails safely at the first AWS step. Rebuild dev first, then re-run the workflow.
+
+## 15. Documentation
+
+| Document | Contents |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | Roles of the UI, kiosk agent and Core API; the boundary between them; failure behaviour; tenant model; code structure; migrations; deferred work. **Read before changing the code.** |
+| [`docs/aws-deployment.md`](docs/aws-deployment.md) | AWS deployment reference: destroying dev to stop costs, the staging apply guard, the GitHub OIDC trust policy |
+| [`docs/phase3-status.md`](docs/phase3-status.md) | Record of the Phase 3 work: what was built and verified in AWS, the dev rebuild sequence, cost estimate |
+| [`docs/phase0-hardware-test-checklist.md`](docs/phase0-hardware-test-checklist.md) | Manual test checklist for the camera, scale and scanner on the kiosk PC |
+| [`self_refund_frontend/README.md`](self_refund_frontend/README.md) | Short notes for the kiosk UI |
