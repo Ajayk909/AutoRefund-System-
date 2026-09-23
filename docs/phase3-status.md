@@ -169,6 +169,56 @@ it to `autorefund/dev/admin-password` without printing it - fetch it with
 `aws secretsmanager get-secret-value --secret-id autorefund/dev/admin-password --query SecretString --output text`
 when needed.
 
+## Record of the 22 Sept 2026 cycle: physical kiosk and CI/CD - Verified
+
+This is the evidence that Phase 3 is complete. Dev was rebuilt with the
+restart sequence above, verified, and destroyed again afterwards to control
+cost.
+
+**Physical kiosk against the cloud API - Verified:**
+- First, the kiosk agent's staging-key identity was fixed (`c6ae86a`): the
+  agent now picks the authentication scheme from the key prefix, `arstg_` or
+  `ardev_`.
+- A full return ran on the physical Windows kiosk, using the real USB barcode
+  scanner, DYMO scale and webcam. It went through the kiosk agent to the
+  cloud Core API over HTTPS and was stored in the cloud database.
+- The kiosk agent's cloud configuration and offline safety were re-tested
+  against the cloud API.
+- Not re-run in this cycle: the `setup` / `init-database` / `start` `.bat`
+  scripts.
+
+**Evidence privacy - Verified (four checks):**
+- The object genuinely exists in S3: two evidence objects confirmed in
+  `autorefund-dev-evidence-<AWS_ACCOUNT_ID>`, 72,037 and 66,446 bytes - real
+  photographs, not empty placeholders.
+- Anonymous access to the S3 object URL: **HTTP 403 Forbidden**. The bucket
+  is not publicly readable, so a leaked URL on its own reveals nothing.
+- The staff evidence endpoint without authentication: **HTTP 401
+  Unauthorized**. Evidence is served only through an authenticated staff
+  endpoint.
+- The same endpoint with valid staff authentication: **HTTP 200 OK**, and the
+  bytes matched. The SHA-256 recorded in the database, the hash of the object
+  in S3 and the hash of the served response were identical, so the image an
+  employee reviews is provably the image the kiosk captured, unaltered.
+
+Checks 2 and 3 are independent defences: either failing alone would still
+not expose an image.
+
+**GitHub Actions - Verified:**
+- The workflows were added (`cc426ea`). Reaching a green run took these
+  fixes, all made the same day: the OIDC trust policy was matched first to
+  the environment-scoped subject and then to the immutable-ID subject
+  (`9142937`, `68abc16`); the deploy role was granted
+  `ec2:DescribeSubnets` / `ec2:DescribeSecurityGroups` (`95374a2`); the
+  deployment is now verified through the AWS API instead of an HTTP health
+  check that the load balancer's IP allow-list blocks (`e8ad317`); and false
+  failures from draining/unused targets and the rollout-state race were
+  removed (`b27a3ca`, `7891a57`, `2939844`).
+- A `deploy-dev.yml` run built from `2939844` (the last of those fixes) then
+  passed every step: tests, image build and push, migration, service
+  update, and rollout and target-health verification.
+  (Since then, `deploy-dev.yml` is started manually only.)
+
 ## Record of what was verified before destroy
 
 Everything below happened against real AWS resources that **no longer
@@ -511,8 +561,12 @@ they run out, the account is closed.** The existing budget alerts
 ## What is NOT done yet
 
 *Historical (Stage 3A). Stage 3B and the GitHub repo settings were done
-later. The S3 remote Terraform backend was never created: state is still
-local. See the top of this file for the current state.*
+later. From Stage 3C, the kiosk agent cloud config and the offline-safety
+re-test against the cloud API were done on 22 Sept 2026 (see "Record of the
+22 Sept 2026 cycle" above). Still not done: the rest of
+`docs/aws-deployment.md` and a fuller `docs/architecture.md` cloud section.
+The S3 remote Terraform backend was never created: state is still local.
+See the top of this file for the current state.*
 
 - **Stage 3B (deploy dev)**: nothing has been applied. No ACM certificate
   requested, no VPC/RDS/ECS/ALB/S3/ECR created, no image pushed, no
