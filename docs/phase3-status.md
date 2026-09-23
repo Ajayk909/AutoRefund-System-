@@ -198,9 +198,9 @@ all since destroyed - see "Dev is destroyed" above):
 
 | Resource | Value |
 |---|---|
-| ALB DNS name | `autorefund-dev-alb-1886817951.ca-central-1.elb.amazonaws.com` |
+| ALB DNS name | `autorefund-dev-alb-<ALB_ID>.ca-central-1.elb.amazonaws.com` |
 | ECR repo | `<AWS_ACCOUNT_ID>.dkr.ecr.ca-central-1.amazonaws.com/autorefund-dev-core-api` |
-| RDS address | `autorefund-dev-db.cj2aygqoyvfq.ca-central-1.rds.amazonaws.com` |
+| RDS address | `autorefund-dev-db.<RDS_ID>.ca-central-1.rds.amazonaws.com` |
 | Evidence S3 bucket | `autorefund-dev-evidence-<AWS_ACCOUNT_ID>` |
 | ECS cluster / service | `autorefund-dev` / `autorefund-dev-core-api` |
 | Admin password secret (empty placeholder) | `autorefund/dev/admin-password` |
