@@ -219,7 +219,7 @@ all since destroyed - see "Dev is destroyed" above):
   subnets, ECS task security group, command override
   `alembic upgrade head`), **not** the always-on service. **Exit code 0.**
   CloudWatch logs (`/ecs/autorefund-dev-core-api`, stream
-  `core-api/core-api/682aafdcd56d4d01a5b805bc545967e5`) show all 6
+  `core-api/core-api/<task-id>`) show all 6
   revisions applied in order, ending at `e5b9c0d7f3a1` (Phase 2, kiosk
   credentials) - matches `docs/architecture.md`'s migration table exactly.
   No secrets appeared in the logs.
