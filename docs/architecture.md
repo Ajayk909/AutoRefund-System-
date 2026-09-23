@@ -113,9 +113,16 @@ routes are gone from the Core API, and `/api/kiosk/*` needs a kiosk credential.
 ### Kiosk identity and device authentication
 
 ```
-agent: KioskIdentity ──► DevelopmentKeyIdentity (KIOSK_ID + KIOSK_DEV_KEY in kiosk_agent\.env)
-core : DeviceAuthenticator ──► DevelopmentKeyAuthenticator (kiosk_credentials table)
+agent: KioskIdentity ──► DevelopmentKeyIdentity (KIOSK_ID + KIOSK_DEV_KEY in kiosk_agent\.env, ardev_ key)
+                     └─► StagingKeyIdentity     (KIOSK_ID + KIOSK_DEV_KEY holding an arstg_ key; AWS dev)
+core : DeviceAuthenticator ──► DevelopmentKeyAuthenticator (DEVICE_AUTH_MODE=development, loopback only)
+                           └─► StagingKeyAuthenticator     (DEVICE_AUTH_MODE=staging-key, HTTPS only)
+      both check hashed keys in the kiosk_credentials table
 ```
+
+The agent picks its identity class from the key's prefix (`ardev_` or
+`arstg_`); the Core API uses the one authenticator selected by
+`DEVICE_AUTH_MODE`.
 
 * The **Core API decides the kiosk from the credential alone**. Headers, query
   strings and body fields claiming another kiosk are ignored.
@@ -444,13 +451,13 @@ receipt number, because Phase 0 cannot store that.
 | `kiosk_devices` table | Devices are reported live by `/hardware/status`; nothing to store yet | With heartbeats/monitoring |
 | `product_reference_images` | Only needed for AI image comparison | AI verification phase |
 | `verification_signals` table | Only weight + photo exist; kept on the return row | AI verification phase |
-| Evidence metadata table | Photos are local files; path on the return row is enough | S3 phase |
+| Evidence metadata table | Nothing needs to query evidence by metadata yet; the path and SHA-256 on the return row are enough | When retention or audit queries need it |
 | `review_decisions` table | One decision per return; stored on the return + audit log | When multi-step review is needed |
 | `role_assignments` | One retailer (+ optional store) per staff member is enough today | Cognito phase |
 | `return_policies` table | One policy from `.env`; code already goes through `policy_for()` | When a second real retailer needs different rules |
-| PostgreSQL Row-Level Security | App scoping + composite FKs cover today's single app | Cloud phase |
-| Renaming `refunds` → `returns` | Rename churn with no functional gain | Possibly with the cloud API |
-| Production kiosk enrollment, key pairs, token rotation | Needs a real deployment target and PKI decisions | With the cloud API |
+| PostgreSQL Row-Level Security | Composite foreign keys and app scoping already enforce isolation; RLS only earns its cost when a second application connects to the same database, which isn't on the roadmap | Not planned for the capstone |
+| Renaming `refunds` → `returns` | Rename churn with no functional gain; would break migrations and docs for nothing | Not planned |
+| Production kiosk enrollment, key pairs, token rotation | Needs PKI decisions that the cloud API existing doesn't make for us | Before production; the AWS dev environment uses interim staging keys |
 | HTTPS between agent and Core API | Both on one PC in local development | Done for the AWS dev environment (staging keys require HTTPS) |
 | Automatic outbox re-sending | Would act without the customer present | Not planned for returns |
 | Moving all UI flow state into the agent | Screens still keep display data in localStorage (no personal data) | When the UI is reworked |
