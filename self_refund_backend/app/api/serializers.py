@@ -2,7 +2,9 @@
 from app import db
 from app.catalog import repository as catalog
 from app.evidence import captures
-from app.models import Staff
+from app.models import Staff, VerificationSignal
+from app.returns import repository as returns_repository
+from app.returns.rules import SIGNAL_ORDER
 from app.tenancy import repository as tenancy
 
 
@@ -62,4 +64,20 @@ def refund_to_staff_dict(refund, storage):
         "has_image": has_image,
         # Authenticated URL: the browser must send the staff bearer token.
         "image_url": f"/api/refunds/{refund.refund_id}/image" if has_image else None,
+        # Staff only. Customers never see confidences or check details: that
+        # would show them how to get past the checks.
+        "verification_signals": signals_to_dicts(returns_repository.signals_for_refund(refund)),
     }
+
+
+def signals_to_dicts(signals: list[VerificationSignal]) -> list[dict]:
+    # Same order the return rules look at them, so staff read the checks
+    # the way the decision was made.
+    ordered = sorted(signals, key=lambda s: SIGNAL_ORDER.index(s.signal_type))
+    return [{
+        "signal_type": s.signal_type,
+        "result": s.result,
+        "confidence": float(s.confidence) if s.confidence is not None else None,
+        "reason": s.reason,
+        "source": s.source,
+    } for s in ordered]

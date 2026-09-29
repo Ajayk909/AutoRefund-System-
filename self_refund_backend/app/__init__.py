@@ -63,6 +63,9 @@ def create_app(config_overrides=None):
     from app.evidence.storage import build_storage
     app.evidence_storage = build_storage(app.config)
 
+    from app.verification.image_verifier import build_verifier
+    app.image_verifier = build_verifier(app.config)
+
     with app.app_context():
         from app import models  # noqa: F401
         from app.api import api_bp

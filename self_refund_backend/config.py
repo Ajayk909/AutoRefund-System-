@@ -96,6 +96,13 @@ class Config:
     # being approved automatically.
     REQUIRE_PHOTO_FOR_AUTO_APPROVAL = _bool("REQUIRE_PHOTO_FOR_AUTO_APPROVAL", True)
 
+    # --- AI photo verification (Phase 4) ---------------------------------------
+    # Which image verifier checks the item photo. "none" = no AI: nothing is
+    # checked, and the return rules ignore it. See app/verification/.
+    IMAGE_VERIFIER = os.getenv("IMAGE_VERIFIER", "none").strip().lower()
+    # Longer than this and the photo check counts as "uncertain" (review).
+    IMAGE_VERIFIER_TIMEOUT_SECONDS = float(os.getenv("IMAGE_VERIFIER_TIMEOUT_SECONDS", "5"))
+
     # --- Kiosk agent -> Core API ----------------------------------------------
     # How kiosk agents authenticate: "development" (Phase 2, loopback only) or
     # "staging-key" (cloud dev/staging only, HTTPS required, refused when

@@ -14,6 +14,7 @@ Security model:
 """
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError
@@ -22,12 +23,14 @@ from app import db
 from app.audit import service as audit
 from app.catalog import repository as catalog
 from app.ids import parse_uuid
-from app.models import Refund
+from app.models import Refund, VerificationSignal
 from app.receipts import repository as receipts
 from app.returns import repository, rules
-from app.returns.rules import ReturnError
+from app.returns.rules import ReturnError, Signal
 from app.returns.states import PENDING_REVIEW, QUANTITY_CONSUMING
 from app.timeutil import utcnow
+from app.verification.image_verifier import (UNCERTAIN, ExpectedProduct, ImageVerifier,
+                                             VerificationResult, verify_safely)
 
 log = logging.getLogger("autorefund.returns")
 
@@ -57,6 +60,9 @@ class ScaleMeasurement:
 class Photo:
     relative_path: str
     sha256: str = None
+    # The JPEG itself, kept in memory for the image verifier so it doesn't
+    # have to download the photo we just stored.
+    data: bytes | None = None
 
 
 @dataclass
@@ -69,6 +75,7 @@ class ReturnResult:
 
 
 def submit_return(req, *, kiosk, policy, read_scale, obtain_photo, discard_photo,
+                  image_verifier, verifier_timeout_seconds,
                   camera_mock=False, require_idempotency_key=False):
     """Create a return.
 
@@ -76,6 +83,8 @@ def submit_return(req, *, kiosk, policy, read_scale, obtain_photo, discard_photo
     ``obtain_photo()`` -> Photo or None; ``discard_photo(photo)`` undoes it
     Both are called only after the cheap eligibility checks pass, so a blocked
     return never stores evidence.
+    ``image_verifier`` checks the photo (see app/verification/image_verifier.py);
+    it gets ``verifier_timeout_seconds`` before its answer counts as "uncertain".
     """
     key = (req.idempotency_key or "").strip()
     if require_idempotency_key and not key:
@@ -118,8 +127,12 @@ def submit_return(req, *, kiosk, policy, read_scale, obtain_photo, discard_photo
 
     photo = obtain_photo()
     try:
+        # Done here, before _create() locks the receipt line: a slow AI must
+        # not keep that database lock held while it thinks.
+        answer = _check_photo(photo, product, image_verifier, verifier_timeout_seconds)
+        ai = rules.ai_signal(answer, image_verifier)
         result = _create(req, kiosk, policy, transaction, product, line, quantity, key,
-                         reading, measured, photo, camera_mock)
+                         reading, measured, photo, camera_mock, ai)
     except Exception:
         if photo:
             discard_photo(photo)
@@ -129,8 +142,17 @@ def submit_return(req, *, kiosk, policy, read_scale, obtain_photo, discard_photo
     return result
 
 
+def _check_photo(photo: Photo | None, product, verifier: ImageVerifier,
+                 timeout_seconds: float) -> VerificationResult:
+    """Ask the image verifier whether the photo shows the expected product."""
+    if not photo or not photo.data:
+        return VerificationResult(UNCERTAIN, None, "No photo to check")
+    expected = ExpectedProduct(str(product.product_id), product.name, product.category)
+    return verify_safely(verifier, photo.data, expected, timeout_seconds)
+
+
 def _create(req, kiosk, policy, transaction, product, line, quantity, key, reading, measured,
-            photo, camera_mock):
+            photo, camera_mock, ai):
     image_path = photo.relative_path if photo else None
 
     # --- lock the receipt line and apply the rules ---------------------------
@@ -145,7 +167,8 @@ def _create(req, kiosk, policy, transaction, product, line, quantity, key, readi
     rejected = _check_line_available(transaction, line, product, quantity, kiosk, policy)
 
     weight = rules.weight_check(product, quantity, measured)
-    decision_status, decision_reason = rules.decide(weight["match"], image_path is not None, policy)
+    signals = _collect_signals(req, weight, image_path is not None, ai)
+    decision_status, decision_reason = rules.decide(signals, policy)
 
     now = utcnow()
     refund = Refund(
@@ -174,6 +197,7 @@ def _create(req, kiosk, policy, transaction, product, line, quantity, key, readi
     except IntegrityError:
         db.session.rollback()
         raise ReturnError("IDEMPOTENCY_KEY_REUSED", "Invalid request. Please start again.", 422)
+    _save_signals(refund, signals, now)
 
     audit.record(
         "refund_started",
@@ -192,6 +216,7 @@ def _create(req, kiosk, policy, transaction, product, line, quantity, key, readi
         decision_status=decision_status,
         decision_reason=decision_reason,
         image_captured=image_path is not None,
+        verification_signals={s.signal_type: s.result for s in signals},
         previous_rejections=rejected,
         timestamp=now.isoformat(),
     )
@@ -200,6 +225,31 @@ def _create(req, kiosk, policy, transaction, product, line, quantity, key, readi
              refund.refund_id, transaction.receipt_number, catalog.primary_barcode(product),
              quantity, measured, weight["expected"], decision_status)
     return ReturnResult(refund, product, weight["expected"], image_path is not None)
+
+
+def _collect_signals(req: ReturnRequest, weight: dict, photo_captured: bool,
+                     ai: Signal) -> list[Signal]:
+    signals = [rules.weight_signal(weight), rules.photo_signal(photo_captured), ai]
+    barcode = rules.barcode_signal(req.barcode)
+    if barcode:
+        signals.append(barcode)
+    return signals
+
+
+def _save_signals(refund: Refund, signals: list[Signal], now: datetime) -> None:
+    # Saved in the same database transaction as the return, so there is never
+    # a return without its checks (or checks without a return).
+    for signal in signals:
+        db.session.add(VerificationSignal(
+            refund_id=refund.refund_id,
+            retailer_id=refund.retailer_id,
+            signal_type=signal.signal_type,
+            result=signal.result,
+            confidence=signal.confidence,
+            reason=signal.reason,
+            source=signal.source,
+            created_at=now,
+        ))
 
 
 def _resolve_line(kiosk, req):

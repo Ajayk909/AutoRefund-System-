@@ -14,7 +14,7 @@ before changing the backend.
 | 1 | Domain structure + tenant-ready database | Done |
 | 2 | Windows kiosk agent + Core API boundary | Done |
 | **3** | **Cloud (AWS) deployment, S3 evidence, CI/CD** | **Done** |
-| 4 | AI verification | Not started |
+| 4 | AI verification | In progress: verifier slot + verification signals done; no real AI yet |
 | Later | Cognito, retailer integrations | Not started |
 
 Three programs run on the kiosk PC in local development. In the AWS dev
@@ -238,6 +238,7 @@ self_refund_backend/
 │  │                  device_auth.py (kiosk credentials)
 │  ├─ identity/       staff login, sessions, @require_staff
 │  ├─ evidence/       storing uploaded photos, finding them for staff
+│  ├─ verification/   image verifier slot for AI photo checks (Phase 4)
 │  ├─ audit/          audit event recording
 │  ├─ models/         SQLAlchemy models, one file per domain
 │  ├─ errors.py       DomainError (customer-safe message + code + HTTP status)
@@ -293,6 +294,8 @@ safe to show a customer; technical detail goes to the log.
 * A new query → the domain's `repository.py`, **taking a retailer id or scope**
 * A new endpoint → `api/`, calling a service
 * A new device model → a new class in `kiosk_agent/hardware/` implementing the interface
+* A real AI photo checker → a class implementing `ImageVerifier` in
+  `verification/image_verifier.py`, added to `VERIFIERS` and chosen with `IMAGE_VERIFIER`
 * Something the kiosk screen needs from hardware → `kiosk_agent/agent/`
 
 ---
@@ -400,6 +403,10 @@ regions, roles per scope) come with Cognito in a later phase.
 | Photo must be a recent, unused capture, else the agent takes one; Core API validates and names it | `kiosk_agent/agent/captures.py`, `evidence/storage.py` |
 | Communication failure is never success; no offline refunds | `kiosk_agent/agent/submissions.py` |
 | No photo → employee review (configurable) | `returns/rules.py::decide` |
+| Every check on a return is saved as a verification signal (barcode, weight, photo, AI: result, confidence, reason, source) in the same transaction as the return | `returns/service.py`, `models/verification.py` |
+| Any counted check that isn't `match` → employee review; only a matching weight can approve, so the AI alone never approves | `returns/rules.py::decide` |
+| Image verifier crash, timeout (`IMAGE_VERIFIER_TIMEOUT_SECONDS`) or invalid answer → `uncertain` → review; it runs before the row lock | `verification/image_verifier.py::verify_safely`, `returns/service.py` |
+| No AI configured (`IMAGE_VERIFIER=none`) is saved as `uncertain` for staff but never counts as a check; an unknown `IMAGE_VERIFIER` stops startup | `verification/image_verifier.py`, `returns/rules.py` |
 | Quantity accounting per receipt line; rejected units released | `returns/rules.py` |
 | Retry limit after rejection | `returns/service.py` |
 | 30-day window (configurable) | `returns/rules.py`, `returns/policy.py` |
@@ -410,8 +417,9 @@ regions, roles per scope) come with Cognito in a later phase.
 | Evidence only for staff who may see that return | `api/staff.py` |
 
 Status note: returns are verified synchronously today, so the conceptual
-*verifying* step has no stored status. It will become a stored state when
-AI verification runs asynchronously (Phase 4).
+*verifying* step has no stored status. The Phase 4 photo check is also
+synchronous, limited by `IMAGE_VERIFIER_TIMEOUT_SECONDS`. *Verifying* will
+become a stored state if AI verification moves to running in the background.
 
 ---
 
@@ -427,6 +435,7 @@ Alembic, one migration per logical change, never editing an applied one.
 | `c7d2e8f1a9b0` | Phase 1: retailers, store groups, stores, kiosks + DEFAULT tenant |
 | `d4a1b6c3e2f5` | Phase 1: tenant ownership, product identifiers, per-retailer receipts |
 | `e5b9c0d7f3a1` | Phase 2: kiosk credentials, evidence SHA-256 |
+| `f1a7c3d9b2e4` | Phase 4: `verification_signals`, unique `(retailer_id, refund_id)` on `refunds` |
 
 Upgrading a Phase 0 database puts all existing data into retailer
 `DEFAULT` / store `DEFAULT-STORE` and creates a kiosk row for every kiosk code
@@ -450,7 +459,8 @@ receipt number, because Phase 0 cannot store that.
 |---|---|---|
 | `kiosk_devices` table | Devices are reported live by `/hardware/status`; nothing to store yet | With heartbeats/monitoring |
 | `product_reference_images` | Only needed for AI image comparison | AI verification phase |
-| `verification_signals` table | Only weight + photo exist; kept on the return row | AI verification phase |
+| Verification signals on the staff screens | The staff API already returns them (`verification_signals`); the React pages don't show them yet | Next Phase 4 step |
+| Signals for returns made before Phase 4 | Their weight/photo result is already on the return row; no backfill | Not planned |
 | Evidence metadata table | Nothing needs to query evidence by metadata yet; the path and SHA-256 on the return row are enough | When retention or audit queries need it |
 | `review_decisions` table | One decision per return; stored on the return + audit log | When multi-step review is needed |
 | `role_assignments` | One retailer (+ optional store) per staff member is enough today | Cognito phase |
@@ -462,4 +472,4 @@ receipt number, because Phase 0 cannot store that.
 | Automatic outbox re-sending | Would act without the customer present | Not planned for returns |
 | Moving all UI flow state into the agent | Screens still keep display data in localStorage (no personal data) | When the UI is reworked |
 | Heartbeats / fleet monitoring | Only `/api/kiosk/status` locally | Monitoring phase |
-| AI, POS, payments | Out of scope so far | Phase 4 (AI); later (POS, payments) |
+| A real AI verifier, POS, payments | The AI slot exists (`NoAIVerifier` is the only verifier); POS and payments are out of scope so far | Phase 4 (AI); later (POS, payments) |

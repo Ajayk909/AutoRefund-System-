@@ -1,0 +1,23 @@
+/* Styles for VerificationSignals.jsx: the list of checks on the employee
+   review screen. Colours match the rest of the staff screens (green approve,
+   red reject, amber pending). */
+.vs-box{margin-bottom:12px;padding:14px;border-radius:12px;background:rgba(4,10,22,.6);border:1px solid rgba(56,189,248,.12)}
+.vs-title{font-family:monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#4e6587;margin-bottom:10px}
+.vs-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.vs-row{display:grid;grid-template-columns:150px 110px 1fr;align-items:center;gap:12px;padding:10px 14px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}
+.vs-name{color:#fff;font-weight:600}
+.vs-reason{color:#9db0ce}
+.vs-confidence{color:#8ddcff;font-family:monospace}
+.vs-empty{margin:0;color:#6882a8;font-size:14px}
+
+/* Grey by default: used for "off" and for any result we don't know. */
+.vs-badge{justify-self:start;padding:4px 10px;border-radius:999px;font-family:monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;border:1px solid rgba(157,176,206,.28);background:rgba(157,176,206,.1);color:#9db0ce}
+.vs-badge-match{border-color:rgba(16,251,196,.3);background:rgba(16,251,196,.12);color:#10fbc4}
+.vs-badge-mismatch{border-color:rgba(255,77,109,.32);background:rgba(255,77,109,.12);color:#ff4d6d}
+.vs-badge-uncertain{border-color:rgba(251,191,36,.28);background:rgba(251,191,36,.12);color:#fbbf24}
+
+/* "No AI configured" row: greyed out so nobody reads it as a real check. */
+.vs-row-off{opacity:.55}
+.vs-row-off .vs-name,.vs-row-off .vs-reason{color:#6882a8}
+
+@media(max-width:600px){.vs-row{grid-template-columns:1fr auto}.vs-reason{grid-column:1 / -1}}

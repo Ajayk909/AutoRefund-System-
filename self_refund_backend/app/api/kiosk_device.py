@@ -91,14 +91,16 @@ def kiosk_submit_return():
     def obtain_photo():
         if not image:
             return None
-        path, digest = current_app.evidence_storage.store_jpeg(
-            image.read(cfg["MAX_EVIDENCE_BYTES"] + 1), cfg["MAX_EVIDENCE_BYTES"])
-        return returns.Photo(path, digest)
+        data = image.read(cfg["MAX_EVIDENCE_BYTES"] + 1)
+        path, digest = current_app.evidence_storage.store_jpeg(data, cfg["MAX_EVIDENCE_BYTES"])
+        return returns.Photo(path, digest, data)
 
     result = returns.submit_return(
         req, kiosk=kiosk, policy=policy_for(cfg, kiosk.retailer_id),
         read_scale=read_scale, obtain_photo=obtain_photo,
         discard_photo=lambda photo: current_app.evidence_storage.delete_stored(photo.relative_path),
+        image_verifier=current_app.image_verifier,
+        verifier_timeout_seconds=cfg["IMAGE_VERIFIER_TIMEOUT_SECONDS"],
         camera_mock=camera.get("mock") is True, require_idempotency_key=True)
     status = 200 if result.replay else 201
     return jsonify({"success": True, "refund": return_result_to_dict(result)}), status

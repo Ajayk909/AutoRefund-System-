@@ -20,7 +20,7 @@ import sys
 from app import create_app, db
 from app.models import (AuditLog, Kiosk, KioskCredential, Product, ProductIdentifier, Refund,
                         Retailer, Staff, StaffSession, Store, StoreGroup, Transaction,
-                        TransactionItem)
+                        TransactionItem, VerificationSignal)
 from app.tenancy import setup
 from cloud_secrets import store_secret
 
@@ -36,8 +36,10 @@ app = create_app()
 
 with app.app_context():
     print("Clearing old demo/test data...")
-    for model in (AuditLog, Refund, TransactionItem, Transaction, ProductIdentifier, Product,
-                  StaffSession, Staff, KioskCredential, Kiosk, Store, StoreGroup, Retailer):
+    # Signals point at returns, so they must go before the returns.
+    for model in (AuditLog, VerificationSignal, Refund, TransactionItem, Transaction,
+                  ProductIdentifier, Product, StaffSession, Staff, KioskCredential, Kiosk,
+                  Store, StoreGroup, Retailer):
         model.query.delete()
     db.session.commit()
 

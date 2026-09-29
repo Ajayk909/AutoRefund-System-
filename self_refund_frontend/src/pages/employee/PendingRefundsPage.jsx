@@ -5,7 +5,17 @@ import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
 import api, { errorMessage } from "../../services/api";
 import EvidenceImage from "../../components/EvidenceImage";
+import VerificationSignals from "../../components/VerificationSignals";
 import useStaffGuard from "../../hooks/useStaffGuard";
+
+// One plain-English line at the top of each card: why this return needs a person.
+function FlaggedReason({ reason }) {
+  return (
+    <p className="pr-flagged">
+      <strong>Flagged because:</strong> {reason || "No reason was recorded."}
+    </p>
+  );
+}
 
 function KioskShell() {
   const [time, setTime] = useState(new Date());
@@ -93,6 +103,7 @@ function PendingRefundsPage() {
                     </div>
                     <span className="pr-badge">Pending</span>
                   </div>
+                  <FlaggedReason reason={item.decision_reason} />
                   <div className="pr-card-body">
                     <div className="pr-field"><span className="pr-label">Measured</span><span className="pr-val pr-mono">{item.measured_weight_grams} g</span></div>
                     <div className="pr-field"><span className="pr-label">Expected</span><span className="pr-val pr-mono">{item.expected_weight_grams} g</span></div>
@@ -100,11 +111,11 @@ function PendingRefundsPage() {
                     <div className="pr-field"><span className="pr-label">Date</span><span className="pr-val">{item.refund_date ? new Date(item.refund_date).toLocaleString() : "N/A"}</span></div>
                   </div>
                   <div className="pr-card-body">
-                    <div className="pr-field"><span className="pr-label">Why flagged</span><span className="pr-val">{item.decision_reason || "—"}</span></div>
                     <div className="pr-field"><span className="pr-label">Quantity</span><span className="pr-val pr-mono">{item.quantity}</span></div>
                     <div className="pr-field"><span className="pr-label">Barcode</span><span className="pr-val pr-mono">{item.barcode || "—"}</span></div>
                     <div className="pr-field"><span className="pr-label">Store / Kiosk</span><span className="pr-val pr-mono">{item.store_code} · {item.kiosk_code}</span></div>
                   </div>
+                  <VerificationSignals signals={item.verification_signals} />
                   {item.image_url ? (
                     <div className="pr-image-preview">
                       <div className="pr-image-label">Captured Image</div>
@@ -147,6 +158,8 @@ function PendingRefundsPage() {
         .pr-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid rgba(56,189,248,.1)}
         .pr-card-name{font-size:22px;color:#fff;font-weight:700}
         .pr-card-sub{color:#6882a8;font-size:13px;margin-top:6px}
+        .pr-flagged{margin:0 0 16px;padding:12px 16px;border-radius:14px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.22);color:#fde68a;font-size:15px}
+        .pr-flagged strong{color:#fbbf24}
         .pr-badge{padding:5px 12px;border-radius:999px;font-family:monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;border:1px solid rgba(251,191,36,.28);background:rgba(251,191,36,.12);color:#fbbf24;font-weight:700}
         .pr-card-body{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
         .pr-field{padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}

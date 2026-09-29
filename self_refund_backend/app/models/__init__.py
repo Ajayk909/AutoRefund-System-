@@ -9,6 +9,7 @@ from app.models.identity import Staff, StaffSession, staff_role_enum
 from app.models.returns import Refund, decision_status_enum
 from app.models.tenancy import Kiosk, KioskCredential, Retailer, Store, StoreGroup
 from app.models.transactions import Transaction, TransactionItem
+from app.models.verification import VerificationSignal
 
 __all__ = [
     "AuditLog",
@@ -24,6 +25,7 @@ __all__ = [
     "StoreGroup",
     "Transaction",
     "TransactionItem",
+    "VerificationSignal",
     "decision_status_enum",
     "staff_role_enum",
 ]

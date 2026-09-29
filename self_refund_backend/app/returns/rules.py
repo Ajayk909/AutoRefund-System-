@@ -6,13 +6,17 @@ requests, talk to hardware or commit to the database, so they are easy to
 test and to reuse when the kiosk agent / cloud API split happens.
 """
 import re
+from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 
 from app.errors import DomainError
 from app.returns import repository
-from app.returns.states import PENDING_REVIEW, QUANTITY_CONSUMING, REJECTED
+from app.returns.policy import ReturnPolicy
+from app.returns.states import APPROVED, PENDING_REVIEW, QUANTITY_CONSUMING, REJECTED
 from app.timeutil import utcnow
+from app.verification.image_verifier import (MATCH, MISMATCH, UNCERTAIN, ImageVerifier,
+                                             VerificationResult)
 
 IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,100}$")
 
@@ -74,11 +78,76 @@ def weight_check(product, quantity, measured):
     }
 
 
+# --- Verification signals ------------------------------------------------------
+BARCODE = "barcode"
+WEIGHT = "weight"
+PHOTO = "photo"
+AI = "ai"
+# decide() looks at signals in this order, so the reason a return goes to
+# review is always the same for the same checks.
+SIGNAL_ORDER = (BARCODE, WEIGHT, PHOTO, AI)
+
+
+@dataclass(frozen=True)
+class Signal:
+    """One check on a return, as saved in verification_signals."""
+    signal_type: str          # barcode | weight | photo | ai
+    result: str               # match | mismatch | uncertain
+    reason: str
+    source: str
+    confidence: float | None = None
+    # False only for the "no AI configured" placeholder. It is saved so staff
+    # can see that no AI looked at the photo, but it must not change the decision.
+    is_real_check: bool = True
+
+
+def barcode_signal(barcode: str | None) -> Signal | None:
+    """Only saved when the kiosk sent a barcode (today's screens let the
+    customer pick the item from the receipt instead). A barcode that isn't on
+    the receipt never gets here: the return is refused earlier (NOT_ON_RECEIPT)."""
+    if not barcode:
+        return None
+    return Signal(BARCODE, MATCH, "Barcode matches a line on the receipt", "receipt-lookup")
+
+
+def weight_signal(weight: dict) -> Signal:
+    if weight["match"]:
+        return Signal(WEIGHT, MATCH, "Weight matched expected product tolerance", "weight-rule")
+    return Signal(WEIGHT, MISMATCH, "Weight outside allowed tolerance", "weight-rule")
+
+
+def photo_signal(photo_captured: bool) -> Signal:
+    """Only says whether a photo exists. What the photo shows is the AI signal's job."""
+    if photo_captured:
+        return Signal(PHOTO, MATCH, "Item photo captured", "kiosk-camera")
+    return Signal(PHOTO, UNCERTAIN, "No item photo could be captured", "kiosk-camera")
+
+
+def ai_signal(answer: VerificationResult, verifier: ImageVerifier) -> Signal:
+    return Signal(AI, answer.result, answer.reason, verifier.name,
+                  confidence=answer.confidence, is_real_check=verifier.is_real_check)
+
+
 # --- Decision ----------------------------------------------------------------
-def decide(weight_match, photo_captured, policy):
-    """Automatic outcome from the verification signals available today."""
-    if not weight_match:
-        return "pending_review", "Weight outside allowed tolerance"
-    if not photo_captured and policy.require_photo_for_auto_approval:
-        return "pending_review", "No item photo could be captured"
-    return "approved", "Weight matched expected product tolerance"
+def decide(signals: list[Signal], policy: ReturnPolicy) -> tuple[str, str]:
+    """Automatic outcome from the verification signals.
+
+    Any check that isn't a clear "match" sends the return to an employee.
+    Only a matching weight can approve: a photo or an AI "match" on its own
+    never does, because the weight is the one check we fully trust.
+    """
+    for signal in sorted(signals, key=lambda s: SIGNAL_ORDER.index(s.signal_type)):
+        if _counts(signal, policy) and signal.result != MATCH:
+            return PENDING_REVIEW, signal.reason
+    if not any(s.signal_type == WEIGHT and s.result == MATCH for s in signals):
+        return PENDING_REVIEW, "Weight was not checked"
+    return APPROVED, "Weight matched expected product tolerance"
+
+
+def _counts(signal: Signal, policy: ReturnPolicy) -> bool:
+    """Whether a signal may change the decision."""
+    if not signal.is_real_check:
+        return False  # "no AI configured" is a note for staff, not a check
+    if signal.signal_type == PHOTO and not policy.require_photo_for_auto_approval:
+        return False  # this policy accepts returns without a photo
+    return True

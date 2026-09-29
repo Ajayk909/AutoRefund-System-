@@ -6,7 +6,7 @@ their own retailer (and store, when they are limited to one).
 from sqlalchemy import and_, or_
 
 from app import db
-from app.models import Refund
+from app.models import Refund, VerificationSignal
 
 
 def _scoped(scope):
@@ -58,3 +58,10 @@ def find_for_staff_by_image(scope, relative_path):
 
 def image_in_use(relative_path):
     return db.session.query(Refund.refund_id).filter_by(image_path=relative_path).first() is not None
+
+
+def signals_for_refund(refund: Refund) -> list[VerificationSignal]:
+    """The checks saved for a return. Scoped by the return's own retailer, so
+    a caller can only get signals of a return it already found."""
+    return VerificationSignal.query.filter_by(
+        retailer_id=refund.retailer_id, refund_id=refund.refund_id).all()

@@ -60,6 +60,9 @@ class Refund(db.Model):
 
     __table_args__ = (
         db.CheckConstraint("quantity > 0", name="ck_refunds_quantity_positive"),
+        # Lets verification_signals point at (retailer_id, refund_id), so a
+        # signal can never belong to another retailer's return.
+        db.UniqueConstraint("retailer_id", "refund_id", name="uq_refunds_retailer_refund"),
         db.ForeignKeyConstraint(["retailer_id", "transaction_id"],
                                 ["transactions.retailer_id", "transactions.transaction_id"],
                                 name="fk_refunds_transaction_same_retailer"),
