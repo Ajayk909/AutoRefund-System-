@@ -33,7 +33,7 @@ from agent.core_client import CoreApiClient  # noqa: E402
 from agent.identity import KioskIdentity  # noqa: E402
 
 CORE_PATHS = re.compile(
-    r"^/api/(staff/|kiosk/(me|receipts|products|returns)|captures/|refunds/(pending|logs)$"
+    r"^/api/(staff/|admin/|kiosk/(me|receipts|products|returns)|captures/|refunds/(pending|logs)$"
     r"|refunds/[^/]+/(approve|reject|mark-refunded|image)$)")
 
 

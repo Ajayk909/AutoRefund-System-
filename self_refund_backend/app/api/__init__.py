@@ -4,6 +4,7 @@ HTTP API (all routes under /api).
     kiosk.py         public health check
     kiosk_device.py  kiosk agent endpoints (device authentication required)
     staff.py         staff login, review queue, decisions, evidence images
+    admin.py         admin-only catalog management (product reference photos)
 
 Hardware endpoints are not here: the kiosk agent owns the hardware.
 
@@ -25,4 +26,4 @@ def _domain_error(err):
     return jsonify(err.body()), err.status
 
 
-from app.api import kiosk, kiosk_device, staff  # noqa: E402,F401  (register routes)
+from app.api import admin, kiosk, kiosk_device, staff  # noqa: E402,F401  (register routes)
