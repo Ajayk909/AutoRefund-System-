@@ -52,3 +52,27 @@ class ProductIdentifier(db.Model):
         db.Index("uq_product_identifiers_one_primary", "product_id", unique=True,
                  postgresql_where=db.text("is_primary")),
     )
+
+
+class ProductImage(db.Model):
+    """A reference photo of a product, for the AI photo check to compare
+    against. Only the storage key is kept here; the image itself is in S3
+    (or the local captures folder in development)."""
+    __tablename__ = "product_images"
+
+    image_id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    retailer_id = db.Column(UUID(as_uuid=True), nullable=False)
+    product_id = db.Column(UUID(as_uuid=True), nullable=False, index=True)
+    s3_key = db.Column(db.String(255), nullable=False)
+    source = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    __table_args__ = (
+        # Same-retailer link: PostgreSQL refuses an image that points at
+        # another retailer's product.
+        db.ForeignKeyConstraint(["retailer_id", "product_id"],
+                                ["products.retailer_id", "products.product_id"],
+                                name="fk_product_images_product_same_retailer"),
+        db.CheckConstraint("source IN ('retailer_catalog', 'kiosk_capture')",
+                           name="ck_product_images_source"),
+    )
