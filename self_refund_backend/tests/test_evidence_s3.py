@@ -71,6 +71,16 @@ def test_store_jpeg_rejects_oversized_data():
     assert storage.client.objects == {}
 
 
+def test_reference_images_go_under_their_own_prefix():
+    storage = _storage()
+    key = storage.store_reference_image(b"\x89PNG\r\n\x1a\n" + b"0" * 200, max_bytes=10_000)
+    assert key.startswith("reference/") and key.endswith(".png")
+    assert storage.client.objects[key][1] == "image/png"
+    with pytest.raises(DomainError):
+        storage.store_reference_image(b"not an image", max_bytes=10_000)
+    assert list(storage.client.objects) == [key]
+
+
 def test_delete_and_read_of_missing_key_do_not_raise():
     storage = _storage()
     storage.delete_stored("evidence/does-not-exist.jpg")  # no error

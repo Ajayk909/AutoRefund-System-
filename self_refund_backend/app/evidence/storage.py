@@ -12,8 +12,11 @@ Two backends, chosen by ``EVIDENCE_BACKEND``:
   dev/staging/production use this one. Credentials come from the ECS task
   role (boto3's default credential chain) - no static AWS keys anywhere.
 
-Both expose the same three operations so callers do not know which backend is
+Both expose the same operations so callers do not know which backend is
 active. ``build_storage()`` is called once, in ``create_app()``.
+
+The same storage also keeps product reference photos (the retailer's own
+picture of a product), under ``reference/`` instead of ``evidence/``.
 """
 import hashlib
 import os
@@ -23,6 +26,8 @@ from abc import ABC, abstractmethod
 from app.errors import DomainError
 
 JPEG_MAGIC = b"\xff\xd8\xff"
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+CONTENT_TYPES = {"jpg": "image/jpeg", "png": "image/png"}
 
 
 def _validate_jpeg(data, max_bytes):
@@ -34,10 +39,27 @@ def _validate_jpeg(data, max_bytes):
         raise DomainError("INVALID_EVIDENCE", "The item photo must be a JPEG image.", 400)
 
 
+def _reference_image_extension(data, max_bytes):
+    """Check a reference photo's bytes and return "jpg" or "png"."""
+    if not data:
+        raise DomainError("INVALID_IMAGE", "The image could not be read.", 400)
+    if len(data) > max_bytes:
+        raise DomainError("IMAGE_TOO_LARGE", "The image is too large.", 413)
+    if data.startswith(JPEG_MAGIC):
+        return "jpg"
+    if data.startswith(PNG_MAGIC):
+        return "png"
+    raise DomainError("INVALID_IMAGE", "The image must be a JPG or PNG file.", 400)
+
+
 class EvidenceStorage(ABC):
     @abstractmethod
     def store_jpeg(self, data, max_bytes):
         """Validate and save a JPEG. Returns (key, sha256)."""
+
+    @abstractmethod
+    def store_reference_image(self, data, max_bytes):
+        """Validate and save a product reference photo (JPG/PNG). Returns the key."""
 
     @abstractmethod
     def delete_stored(self, key):
@@ -68,6 +90,15 @@ class LocalEvidenceStorage(EvidenceStorage):
         with open(os.path.join(self.capture_dir, filename), "wb") as fh:
             fh.write(data)
         return f"captures/{filename}", hashlib.sha256(data).hexdigest()
+
+    def store_reference_image(self, data, max_bytes):
+        extension = _reference_image_extension(data, max_bytes)
+        folder = os.path.join(self.capture_dir, "reference")
+        os.makedirs(folder, exist_ok=True)
+        filename = f"{secrets.token_hex(16)}.{extension}"
+        with open(os.path.join(folder, filename), "wb") as fh:
+            fh.write(data)
+        return f"reference/{filename}"
 
     def delete_stored(self, key):
         if not key:
@@ -109,6 +140,14 @@ class S3EvidenceStorage(EvidenceStorage):
         self.client.put_object(Bucket=self.bucket, Key=key, Body=data,
                                ContentType="image/jpeg", ServerSideEncryption="AES256")
         return key, digest
+
+    def store_reference_image(self, data, max_bytes):
+        extension = _reference_image_extension(data, max_bytes)
+        key = f"reference/{secrets.token_hex(16)}.{extension}"
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=data,
+                               ContentType=CONTENT_TYPES[extension],
+                               ServerSideEncryption="AES256")
+        return key
 
     def delete_stored(self, key):
         if not key:
