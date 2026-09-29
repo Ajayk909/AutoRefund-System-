@@ -15,3 +15,12 @@ for a 2nd-year student.
 - Short comments that explain WHY, not what. No giant docstrings.
 - If something can be done in 10 clear lines instead of 40 "proper" lines, do
   the 10.
+
+## Working rules
+
+- Run tests from `self_refund_backend` with `.\.venv\Scripts\python.exe -m pytest`,
+  with `TEST_DATABASE_URL` pointing at `refund_kiosk_test`. Never point it at
+  `refund_kiosk`: the tests drop all tables.
+- Git: small logical commits, no history rewrites or force-push, push only
+  after tests pass.
+- Never create or change AWS resources without asking first.
