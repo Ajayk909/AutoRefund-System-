@@ -224,6 +224,7 @@ self_refund_backend/
 │  │   ├─ kiosk_device.py kiosk agent endpoints (device credential required)
 │  │   ├─ kiosk.py        public health check
 │  │   ├─ staff.py        login, review queue, decisions, evidence
+│  │   ├─ admin.py        admin only: product reference photo upload
 │  │   └─ serializers.py  JSON shapes
 │  ├─ returns/        the heart of AutoRefund
 │  │   ├─ rules.py        eligibility, quantity accounting, weight check, decision
@@ -233,7 +234,7 @@ self_refund_backend/
 │  │   ├─ review.py       staff approve / reject / mark refunded
 │  │   └─ repository.py   database queries
 │  ├─ receipts/       receipt lookup (service + repository)
-│  ├─ catalog/        products and identifiers (repository)
+│  ├─ catalog/        products and identifiers (repository), reference photos
 │  ├─ tenancy/        retailers, stores, kiosks; KioskContext + StaffScope;
 │  │                  device_auth.py (kiosk credentials)
 │  ├─ identity/       staff login, sessions, @require_staff
@@ -322,6 +323,7 @@ Retailer (tenant)              e.g. DEMO
 | `kiosks` | retailer + store | `code` (global: it is the device's KIOSK_ID) |
 | `products` | retailer | internal `product_id` |
 | `product_identifiers` | retailer + product | `(retailer_id, value)`; one primary per product |
+| `product_images` | retailer + product | – (a product may have several reference photos) |
 | `transactions` | retailer + purchase store | `(retailer_id, receipt_number)` |
 | `transaction_items` | retailer | – |
 | `refunds` (returns) | retailer + return store + kiosk | `idempotency_key` |
@@ -372,6 +374,24 @@ Retailer DEMO : barcode 111111 → anything else            (refused)
 
 Retailer integrations (a later phase) will map a retailer's catalog feed into these
 tables through an adapter; nothing is Walmart- or retailer-specific.
+
+### Product reference photos
+
+The AI photo check (Phase 4) will compare the kiosk's photo with the
+product's official photo. A real retailer would supply these from its own
+catalog; for the capstone we act as our own retailer and store them ourselves:
+
+- `product_images` holds only the storage key, never the image bytes.
+  `source` is `retailer_catalog` (uploaded by an admin) or `kiosk_capture`.
+- The images live in the same private evidence bucket, under `reference/`
+  (customer photos stay under `evidence/`). Locally they go to
+  `CAPTURE_DIR/reference/`.
+- Admins upload them with `POST /api/admin/products/<product_id>/reference-images`
+  (multipart field `image`, JPG or PNG, at most `MAX_EVIDENCE_BYTES`). The
+  server checks the role and the retailer; another retailer's product answers 404.
+- The AI will read them through `get_reference_images(retailer_id, product_id)`
+  in `app/catalog/reference_images.py`. That is where a real retailer catalog
+  connector plugs in later.
 
 ### Kiosk identity
 
@@ -436,6 +456,7 @@ Alembic, one migration per logical change, never editing an applied one.
 | `d4a1b6c3e2f5` | Phase 1: tenant ownership, product identifiers, per-retailer receipts |
 | `e5b9c0d7f3a1` | Phase 2: kiosk credentials, evidence SHA-256 |
 | `f1a7c3d9b2e4` | Phase 4: `verification_signals`, unique `(retailer_id, refund_id)` on `refunds` |
+| `a2c4e6f8b1d3` | Phase 4: `product_images` (reference photos) |
 
 Upgrading a Phase 0 database puts all existing data into retailer
 `DEFAULT` / store `DEFAULT-STORE` and creates a kiosk row for every kiosk code
@@ -458,7 +479,9 @@ receipt number, because Phase 0 cannot store that.
 | Item | Why not now | Planned |
 |---|---|---|
 | `kiosk_devices` table | Devices are reported live by `/hardware/status`; nothing to store yet | With heartbeats/monitoring |
-| `product_reference_images` | Only needed for AI image comparison | AI verification phase |
+| Admin product page (reference photo upload UI) | The upload API works on its own; no admin catalog screen exists yet | When the admin UI is built |
+| Viewing reference photos (presigned URLs) | Nothing displays them yet | With the first screen that shows them |
+| Retailer catalog connector for reference photos | We act as our own retailer for the capstone | Retailer integration phase |
 | Verification signals on the staff screens | The staff API already returns them (`verification_signals`); the React pages don't show them yet | Next Phase 4 step |
 | Signals for returns made before Phase 4 | Their weight/photo result is already on the return row; no backfill | Not planned |
 | Evidence metadata table | Nothing needs to query evidence by metadata yet; the path and SHA-256 on the return row are enough | When retention or audit queries need it |
