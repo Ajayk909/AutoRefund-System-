@@ -53,9 +53,9 @@ class FakeStorage:
         return self.files.get(key)
 
 
-def _reply(same=True, damage=False, confidence="high", reason="Looks right"):
-    return json.dumps({"same_product": same, "obvious_damage": damage,
-                       "confidence": confidence, "reason": reason})
+def _reply(same=True, damage=False, confidence="high", reason="Looks right", missing=False):
+    return json.dumps({"differences": "none", "same_product": same, "missing_part": missing,
+                       "obvious_damage": damage, "confidence": confidence, "reason": reason})
 
 
 def _verifier(client):
@@ -74,13 +74,15 @@ def test_same_product_without_damage_and_sure_is_a_match():
     assert answer.reason == "Same purple Somersby can (AI confidence: high)"
 
 
-@pytest.mark.parametrize("same, damage, confidence", [
-    (False, False, "high"),    # clearly a different product
-    (True, True, "high"),      # right product, but damaged or a part missing
-    (False, False, "medium"),
+@pytest.mark.parametrize("same, damage, missing, confidence", [
+    (False, False, False, "high"),    # clearly a different product
+    (True, True, False, "high"),      # right product, but damaged
+    (True, False, True, "high"),      # right product, but a part is missing
+    (True, False, True, "medium"),
+    (False, False, False, "medium"),
 ])
-def test_wrong_or_damaged_product_is_a_mismatch(same, damage, confidence):
-    assert _check(_reply(same, damage, confidence)).result == MISMATCH
+def test_wrong_damaged_or_incomplete_product_is_a_mismatch(same, damage, missing, confidence):
+    assert _check(_reply(same, damage, confidence, missing=missing)).result == MISMATCH
 
 
 @pytest.mark.parametrize("same, damage, confidence", [
@@ -100,8 +102,10 @@ def test_json_wrapped_in_a_code_block_is_still_read():
     "Yes, this is the same can.",                     # no JSON at all
     '{"same_product": true, "obvious_damage": fal',   # cut off
     _reply(confidence="very high"),
-    '{"same_product": "yes", "obvious_damage": false, "confidence": "high", "reason": "ok"}',
-    '{"same_product": true, "obvious_damage": false, "confidence": "high"}',  # no reason
+    _reply().replace('"same_product": true', '"same_product": "yes"'),
+    json.dumps({"same_product": True, "missing_part": False, "obvious_damage": False,
+                "confidence": "high", "reason": "ok"}),  # no "differences"
+    _reply().replace('"missing_part": false', '"missing_part": null'),
     "[]",
 ])
 def test_bad_reply_is_uncertain(reply):

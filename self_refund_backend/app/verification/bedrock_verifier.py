@@ -1,7 +1,8 @@
 """
 The real AI photo check (IMAGE_VERIFIER=bedrock). It sends the product's
 reference photo(s) and the kiosk photo to an Amazon Bedrock model and asks:
-is this the same product, and is it damaged or missing a part?
+is this the same product, is a part missing, and is it damaged?
+Test results with real photos: docs/ai-evaluation.md.
 
 It uses Bedrock's Converse API, which works the same for every model, so
 switching model (e.g. Nova -> Claude) is only a change of BEDROCK_MODEL_ID.
@@ -21,13 +22,20 @@ MAX_REFERENCE_IMAGES = 3
 IMAGE_FORMATS = {"image/jpeg": "jpeg", "image/png": "png"}
 CONFIDENCES = ("high", "medium", "low")
 
+# "differences" comes first on purpose: the model has to compare the photos
+# before it gives its true/false answers.
 QUESTION = """You check returned items at a self-service return kiosk.
-The reference photo(s) show the correct product: "{name}".
-Is the item in the kiosk photo the same product? Is it obviously damaged, or
-missing a part that the reference photo shows (for example a pump, cap or lid,
-or one item of a pair)?
-Reply ONLY with JSON, no other text:
-{{"same_product": true or false, "obvious_damage": true or false (true also when a part is missing), "confidence": "high" or "medium" or "low", "reason": "one short sentence"}}"""
+The reference photo(s) show the correct product, complete and undamaged: "{name}".
+Compare the kiosk photo with the reference photo(s) carefully: the product,
+the number of items, and every part (for example a pump, cap or lid, or one
+item of a pair).
+Reply ONLY with JSON, no other text, with the fields in this order:
+{{"differences": "every visible difference, or none",
+"same_product": true or false,
+"missing_part": true or false (a part or item in the reference photo is not in the kiosk photo),
+"obvious_damage": true or false,
+"confidence": "high" or "medium" or "low",
+"reason": "one short sentence for the store employee"}}"""
 
 
 class BedrockVerifier(ImageVerifier):
@@ -66,7 +74,7 @@ class BedrockVerifier(ImageVerifier):
         response = self.client.converse(
             modelId=self.model_id,
             messages=[{"role": "user", "content": content}],
-            inferenceConfig={"maxTokens": 200, "temperature": 0})
+            inferenceConfig={"maxTokens": 400, "temperature": 0})
         usage = response.get("usage", {})
         log.info("Bedrock %s: %s ms, %s input tokens, %s output tokens", self.model_id,
                  response.get("metrics", {}).get("latencyMs"), usage.get("inputTokens"),
@@ -97,14 +105,15 @@ def answer_to_result(text: str) -> VerificationResult:
         log.warning("Bedrock reply was not the JSON we asked for: %r", text)
         return VerificationResult(UNCERTAIN, None, "AI answer could not be read")
 
-    same, damaged, confidence = (answer["same_product"], answer["obvious_damage"],
-                                 answer["confidence"])
+    confidence = answer["confidence"]
+    problem = (not answer["same_product"] or answer["missing_part"]
+               or answer["obvious_damage"])
     # The model only says high/medium/low, so we keep that word for staff
     # instead of inventing a percentage.
     reason = f"{answer['reason'].strip()} (AI confidence: {confidence})"
-    if same and not damaged and confidence == "high":
+    if not problem and confidence == "high":
         return VerificationResult(MATCH, None, reason)
-    if (not same or damaged) and confidence in ("high", "medium"):
+    if problem and confidence in ("high", "medium"):
         return VerificationResult(MISMATCH, None, reason)
     return VerificationResult(UNCERTAIN, None, reason)
 
@@ -121,9 +130,12 @@ def _parse_answer(text):
         return None
     if not isinstance(answer, dict):
         return None
-    if not isinstance(answer.get("same_product"), bool) \
-            or not isinstance(answer.get("obvious_damage"), bool):
-        return None
-    if answer.get("confidence") not in CONFIDENCES or not isinstance(answer.get("reason"), str):
+    for field in ("same_product", "missing_part", "obvious_damage"):
+        if not isinstance(answer.get(field), bool):
+            return None
+    for field in ("differences", "reason"):
+        if not isinstance(answer.get(field), str):
+            return None
+    if answer.get("confidence") not in CONFIDENCES:
         return None
     return answer
