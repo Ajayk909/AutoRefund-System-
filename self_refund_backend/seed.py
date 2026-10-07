@@ -62,6 +62,14 @@ with app.app_context():
                                      category="Candy")
     yogurt = setup.create_product(retailer, "444444", "Yogurt Cup", 100, "1.25",
                                   category="Dairy")
+    # Real items with real barcodes, for testing with the scanner, scale and webcam.
+    somersby = setup.create_product(retailer, "675325010104", "Somersby Blackberry Cider Can",
+                                    478, "3.49", category="Beverage")
+    cerave = setup.create_product(retailer, "3606000611467", "CeraVe Foaming Facial Cleanser",
+                                  416, "17.99", category="Personal Care")
+    shoes = setup.create_product(retailer, "197967194818",
+                                 "New Balance 2002R Shoes (Black/Grey, US 8)", 898, "199.99",
+                                 category="Footwear")
 
     print("Adding receipts...")
     setup.create_receipt(store, "RCP-1001", [(coke, 1), (chips, 1), (chocolate, 1)],
@@ -70,6 +78,8 @@ with app.app_context():
     setup.create_receipt(store, "RCP-1002", [(yogurt, 3)])
     # RCP-0900: bought 45 days ago, outside the default 30-day return window
     setup.create_receipt(store, "RCP-0900", [(coke, 1)], days_ago=45, payment_method="Cash")
+    # RCP-2001: the real demo items, bought today
+    setup.create_receipt(store, "RCP-2001", [(somersby, 1), (cerave, 1), (shoes, 1)])
 
     print("Adding admin user...")
     environment = app.config.get("ENVIRONMENT", "local")
@@ -86,7 +96,8 @@ with app.app_context():
     db.session.commit()
 
     print("\nSEED COMPLETE")
-    print("Receipts: RCP-1001 (3 items), RCP-1002 (Yogurt Cup x3), RCP-0900 (outside return window)")
+    print("Receipts: RCP-1001 (3 items), RCP-1002 (Yogurt Cup x3), RCP-0900 (outside return window), "
+          "RCP-2001 (real demo items)")
     if environment == "local":
         print("admin1 / admin123  (demo only - change before any real use)")
     else:
