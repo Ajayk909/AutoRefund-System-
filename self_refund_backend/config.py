@@ -98,8 +98,12 @@ class Config:
 
     # --- AI photo verification (Phase 4) ---------------------------------------
     # Which image verifier checks the item photo. "none" = no AI: nothing is
-    # checked, and the return rules ignore it. See app/verification/.
+    # checked, and the return rules ignore it. "bedrock" = Amazon Bedrock
+    # compares it with the product's reference photos. See app/verification/.
     IMAGE_VERIFIER = os.getenv("IMAGE_VERIFIER", "none").strip().lower()
+    # Bedrock model or inference profile ID, e.g. ca.amazon.nova-lite-v1:0.
+    # Required when IMAGE_VERIFIER=bedrock. Region comes from AWS_REGION.
+    BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID")
     # Longer than this and the photo check counts as "uncertain" (review).
     IMAGE_VERIFIER_TIMEOUT_SECONDS = float(os.getenv("IMAGE_VERIFIER_TIMEOUT_SECONDS", "5"))
 

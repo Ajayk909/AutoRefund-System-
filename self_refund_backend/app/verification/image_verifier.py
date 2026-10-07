@@ -1,7 +1,8 @@
 """
 The "slot" an AI photo checker plugs into. A verifier looks at the item photo
 and says whether it shows the expected product: match, mismatch or uncertain.
-No real AI exists yet, so the default is NoAIVerifier, which checks nothing.
+The default is NoAIVerifier, which checks nothing. IMAGE_VERIFIER=bedrock
+switches on the real AI check (bedrock_verifier.py).
 """
 import logging
 from abc import ABC, abstractmethod
@@ -30,6 +31,9 @@ class ExpectedProduct:
     product_id: str
     name: str
     category: str | None
+    # Storage keys of the product's reference photos (plain strings, so they
+    # are safe to use from the verifier's thread).
+    reference_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,22 +69,26 @@ class NoAIVerifier(ImageVerifier):
         return VerificationResult(UNCERTAIN, None, "No AI verifier configured")
 
 
-# IMAGE_VERIFIER setting -> class. To add a real verifier, write a class
-# that implements ImageVerifier and add it here.
-VERIFIERS = {
-    "none": NoAIVerifier,
-}
+VERIFIER_NAMES = ("none", "bedrock")
 
 
-def build_verifier(config) -> ImageVerifier:
-    """Choose the verifier from the IMAGE_VERIFIER setting (default "none")."""
+def build_verifier(config, storage=None) -> ImageVerifier:
+    """Choose the verifier from the IMAGE_VERIFIER setting (default "none").
+    ``storage`` is where the Bedrock verifier reads reference photos from."""
     name = str(config.get("IMAGE_VERIFIER", "none")).strip().lower()
-    if name not in VERIFIERS:
-        # Refuse to start rather than quietly using "none": someone who
-        # thinks AI checks are on must not be misled.
-        raise RuntimeError(
-            f"Unknown IMAGE_VERIFIER={name!r}. Must be one of {sorted(VERIFIERS)}.")
-    return VERIFIERS[name]()
+    if name == "none":
+        return NoAIVerifier()
+    if name == "bedrock":
+        model_id = config.get("BEDROCK_MODEL_ID")
+        if not model_id:
+            raise RuntimeError("IMAGE_VERIFIER=bedrock requires BEDROCK_MODEL_ID.")
+        # Imported here because bedrock_verifier.py imports this file.
+        from app.verification.bedrock_verifier import BedrockVerifier
+        return BedrockVerifier(storage, model_id, region=config.get("AWS_REGION"),
+                               timeout_seconds=config.get("IMAGE_VERIFIER_TIMEOUT_SECONDS", 5))
+    # Refuse to start rather than quietly using "none": someone who
+    # thinks AI checks are on must not be misled.
+    raise RuntimeError(f"Unknown IMAGE_VERIFIER={name!r}. Must be one of {VERIFIER_NAMES}.")
 
 
 def verify_safely(verifier: ImageVerifier, photo: bytes, expected: ExpectedProduct,

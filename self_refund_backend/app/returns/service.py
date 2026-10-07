@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from app import db
 from app.audit import service as audit
 from app.catalog import repository as catalog
+from app.catalog.reference_images import get_reference_images
 from app.ids import parse_uuid
 from app.models import Refund, VerificationSignal
 from app.receipts import repository as receipts
@@ -147,7 +148,10 @@ def _check_photo(photo: Photo | None, product, verifier: ImageVerifier,
     """Ask the image verifier whether the photo shows the expected product."""
     if not photo or not photo.data:
         return VerificationResult(UNCERTAIN, None, "No photo to check")
-    expected = ExpectedProduct(str(product.product_id), product.name, product.category)
+    # Looked up here: the verifier runs in its own thread, away from the database.
+    reference_keys = tuple(get_reference_images(product.retailer_id, product.product_id))
+    expected = ExpectedProduct(str(product.product_id), product.name, product.category,
+                               reference_keys)
     return verify_safely(verifier, photo.data, expected, timeout_seconds)
 
 
