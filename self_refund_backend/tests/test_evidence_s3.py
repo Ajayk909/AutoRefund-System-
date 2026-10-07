@@ -89,6 +89,26 @@ def test_delete_and_read_of_missing_key_do_not_raise():
     assert storage.read(None) is None
 
 
+def test_local_storage_reads_back_reference_images(tmp_path):
+    """The AI check reads reference photos by key, so read()/exists() must
+    find them in the reference/ subfolder, with the right content type."""
+    storage = LocalEvidenceStorage(tmp_path)
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 200
+    key = storage.store_reference_image(png, max_bytes=10_000)
+    assert storage.exists(key)
+    assert storage.read(key) == (png, "image/png")
+
+    jpeg_key = storage.store_reference_image(JPEG, max_bytes=10_000)
+    assert storage.read(jpeg_key) == (JPEG, "image/jpeg")
+
+
+def test_local_storage_key_cannot_leave_its_folder(tmp_path):
+    (tmp_path / "secret.jpg").write_bytes(JPEG)
+    storage = LocalEvidenceStorage(tmp_path / "captures")
+    assert not storage.exists("reference/../../secret.jpg")
+    assert storage.read("../secret.jpg") is None
+
+
 def test_build_storage_defaults_to_local(tmp_path):
     storage = build_storage({"CAPTURE_DIR": tmp_path})
     assert isinstance(storage, LocalEvidenceStorage)

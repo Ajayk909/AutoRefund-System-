@@ -75,13 +75,19 @@ class EvidenceStorage(ABC):
 
 
 class LocalEvidenceStorage(EvidenceStorage):
-    """Files under ``CAPTURE_DIR``. Keys look like ``captures/evidence_<hex>.jpg``."""
+    """Files under ``CAPTURE_DIR``. Keys look like ``captures/evidence_<hex>.jpg``
+    or ``reference/<hex>.jpg``/``.png`` (in ``CAPTURE_DIR/reference``)."""
 
     def __init__(self, capture_dir):
         self.capture_dir = str(capture_dir)
 
     def _path(self, key):
-        return os.path.join(self.capture_dir, os.path.basename(key))
+        # Only the file name is taken from the key, so a key can never point
+        # outside our folders. Reference photos live in their own subfolder.
+        filename = os.path.basename(key)
+        if key.startswith("reference/"):
+            return os.path.join(self.capture_dir, "reference", filename)
+        return os.path.join(self.capture_dir, filename)
 
     def store_jpeg(self, data, max_bytes):
         _validate_jpeg(data, max_bytes)
@@ -114,8 +120,9 @@ class LocalEvidenceStorage(EvidenceStorage):
     def read(self, key):
         if not self.exists(key):
             return None
+        extension = key.rsplit(".", 1)[-1].lower()
         with open(self._path(key), "rb") as fh:
-            return fh.read(), "image/jpeg"
+            return fh.read(), CONTENT_TYPES.get(extension, "image/jpeg")
 
 
 class S3EvidenceStorage(EvidenceStorage):
