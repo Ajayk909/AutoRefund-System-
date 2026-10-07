@@ -103,7 +103,19 @@ variable "device_auth_mode" {
 variable "enable_ai_photo_check" {
   type        = bool
   default     = false
-  description = "true = IMAGE_VERIFIER=bedrock: the Core API asks Amazon Bedrock (Nova Lite) to check item photos, and the task role may call that one model. About $0.0003 per return."
+  description = "true = IMAGE_VERIFIER=bedrock: the Core API asks Amazon Bedrock to check item photos, and the task role may call the model below (and nothing else). Nova Lite: about $0.0003 per return."
+}
+
+variable "bedrock_model_id" {
+  type        = string
+  default     = "ca.amazon.nova-lite-v1:0"
+  description = "Bedrock inference profile ID for the photo check (with its geography prefix, e.g. \"ca.\"). Becomes BEDROCK_MODEL_ID in the container AND the only model the task role may call."
+}
+
+variable "bedrock_model_regions" {
+  type        = list(string)
+  default     = ["ca-central-1", "ca-west-1"]
+  description = "Every region the inference profile routes to (aws bedrock get-inference-profile lists them). The task role may call the model in exactly these regions."
 }
 
 variable "oneoff_secret_name_prefix" {

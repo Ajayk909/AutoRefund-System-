@@ -99,24 +99,25 @@ resource "aws_iam_role_policy" "task_s3" {
   policy = data.aws_iam_policy_document.task_s3.json
 }
 
-# --- IAM: the AI photo check (Amazon Bedrock, Nova Lite) - only when switched on --------
-# The "ca." inference profile keeps photos in Canada. Calling it needs
-# permission on the profile AND on the model in every region it can route
-# to (ca-central-1 and ca-west-1). Nothing else in Bedrock is allowed.
+# --- IAM: the AI photo check (Amazon Bedrock) - only when switched on -------------------
+# Calling an inference profile needs permission on the profile AND on the
+# model in every region the profile can route to. Exactly that one model
+# is allowed, nothing else in Bedrock.
 
 locals {
-  bedrock_model_id = "ca.amazon.nova-lite-v1:0"
+  # An inference profile ID is the model ID with a geography in front:
+  # "ca.amazon.nova-lite-v1:0" -> "amazon.nova-lite-v1:0".
+  bedrock_foundation_model_id = replace(var.bedrock_model_id, "/^[a-z]+\\./", "")
 }
 
 data "aws_iam_policy_document" "task_bedrock" {
   statement {
-    sid     = "InvokeNovaLiteForPhotoCheck"
+    sid     = "InvokePhotoCheckModel"
     actions = ["bedrock:InvokeModel"]
-    resources = [
-      "arn:aws:bedrock:ca-central-1:${data.aws_caller_identity.current.account_id}:inference-profile/${local.bedrock_model_id}",
-      "arn:aws:bedrock:ca-central-1::foundation-model/amazon.nova-lite-v1:0",
-      "arn:aws:bedrock:ca-west-1::foundation-model/amazon.nova-lite-v1:0",
-    ]
+    resources = concat(
+      ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_model_id}"],
+      [for region in var.bedrock_model_regions : "arn:aws:bedrock:${region}::foundation-model/${local.bedrock_foundation_model_id}"],
+    )
   }
 }
 
@@ -246,7 +247,7 @@ resource "aws_ecs_task_definition" "core_api" {
         { name = "CORS_ORIGINS", value = var.cors_origins },
         { name = "DEVICE_AUTH_MODE", value = var.device_auth_mode },
         { name = "IMAGE_VERIFIER", value = var.enable_ai_photo_check ? "bedrock" : "none" },
-        { name = "BEDROCK_MODEL_ID", value = local.bedrock_model_id },
+        { name = "BEDROCK_MODEL_ID", value = var.bedrock_model_id },
       ]
       secrets = [
         { name = "DB_PASSWORD", valueFrom = "${var.db_master_user_secret_arn}:password::" },

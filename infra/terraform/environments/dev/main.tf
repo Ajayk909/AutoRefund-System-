@@ -70,7 +70,14 @@ module "ecs_service" {
   evidence_bucket_name        = module.evidence_s3.bucket_name
   aws_region                  = var.aws_region
   oneoff_secret_name_prefix   = "autorefund/${var.environment}/"
-  enable_ai_photo_check       = true
+
+  # AI photo check. To switch model, change only these two lines:
+  # the inference profile ID, and every region it routes to (see
+  # `aws bedrock get-inference-profile --inference-profile-identifier <id>`).
+  # The container setting and the IAM permission both follow from them.
+  enable_ai_photo_check = true
+  bedrock_model_id      = "ca.amazon.nova-lite-v1:0"
+  bedrock_model_regions = ["ca-central-1", "ca-west-1"]
 }
 
 module "github_oidc" {
