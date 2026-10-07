@@ -70,6 +70,7 @@ module "ecs_service" {
   evidence_bucket_name        = module.evidence_s3.bucket_name
   aws_region                  = var.aws_region
   oneoff_secret_name_prefix   = "autorefund/${var.environment}/"
+  enable_ai_photo_check       = true
 }
 
 module "github_oidc" {

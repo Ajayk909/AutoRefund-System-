@@ -100,6 +100,12 @@ variable "device_auth_mode" {
   default = "staging-key"
 }
 
+variable "enable_ai_photo_check" {
+  type        = bool
+  default     = false
+  description = "true = IMAGE_VERIFIER=bedrock: the Core API asks Amazon Bedrock (Nova Lite) to check item photos, and the task role may call that one model. About $0.0003 per return."
+}
+
 variable "oneoff_secret_name_prefix" {
   type        = string
   description = "Secrets Manager name prefix the one-off task role may create/write (e.g. autorefund/dev/)."
