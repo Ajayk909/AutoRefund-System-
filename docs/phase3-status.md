@@ -104,6 +104,11 @@ command above before proceeding.
 terraform apply
 terraform output alb_dns_name
 ```
+Since Phase 4 this also gives the ECS task role `bedrock:InvokeModel` on
+Nova Lite only (policy `bedrock-photo-check`). It also sets
+`IMAGE_VERIFIER=bedrock` and `BEDROCK_MODEL_ID=ca.amazon.nova-lite-v1:0` in
+the task definition. Step 6 copies that task definition, so both settings
+carry over.
 
 **4. Namecheap CNAME #2 (the API hostname):**
 Host = `api-dev`; Value = the `alb_dns_name` output; Type = CNAME; TTL =
@@ -160,6 +165,56 @@ Invoke-WebRequest https://api-dev.autorefundkiosk.online/api/health
 ```
 Expect `200 {"status":"ok",...}`. Optionally repeat the staff-login and
 CORS-preflight checks from this cycle (see below) to fully re-confirm.
+
+**11. Kiosk key for the cloud** (after seed: seed deletes all kiosk keys).
+Run as a one-off task, with the same network config and `taskRoleArn`
+override as seed:
+```powershell
+--overrides '{"taskRoleArn":"<ecs_oneoff_task_role_arn output>","containerOverrides":[{"name":"core-api","command":["python","manage_tenancy.py","issue-staging-key","KIOSK-001"]}]}'
+```
+Then, in the git-ignored `kiosk_agent\.env`:
+- set `CORE_API_URL=https://api-dev.autorefundkiosk.online`;
+- set `KIOSK_DEV_KEY` to the output of
+  `aws secretsmanager get-secret-value --secret-id autorefund/dev/kiosk/KIOSK-001 --query SecretString --output text`.
+
+Then start the kiosk agent and the frontend.
+
+**12. Re-upload the 3 reference photos** (Phase 4 AI photo check). Seeding
+makes new product IDs, and the new S3 bucket is empty. Without a reference
+photo, the AI answers "uncertain", so every return goes to review. The
+kiosk agent (running, step 11) looks up each product's cloud ID by barcode:
+```powershell
+$api = "https://api-dev.autorefundkiosk.online"
+$pw = aws secretsmanager get-secret-value --secret-id autorefund/dev/admin-password --query SecretString --output text
+$token = (Invoke-RestMethod -Method Post "$api/api/staff/login" -ContentType "application/json" -Body (@{username="admin1"; password=$pw} | ConvertTo-Json)).token
+$photos = @{ "675325010104" = "Somersby.jpg"; "3606000611467" = "Cerave.jpg"; "197967194818" = "NB.jpg" }
+foreach ($barcode in $photos.Keys) {
+  $id = (Invoke-RestMethod "http://127.0.0.1:5100/api/products/lookup/$barcode").product.product_id
+  curl.exe -s -H "Authorization: Bearer $token" -F "image=@C:\Users\91743\Desktop\capstone\camera\MAIN\$($photos[$barcode])" "$api/api/admin/products/$id/reference-images"
+}
+```
+Expect three `{"success": true, ..., "s3_key": "reference/..."}` lines.
+(`curl.exe` because Windows PowerShell 5.1 can't send multipart forms.)
+
+**13. Test receipt RCP-2001 on the kiosk against the cloud.** Each line
+has quantity 1, so do the "wrong" version of an item **first**: an
+approval uses the line up. The retry limit allows one more attempt after
+one rejection.
+
+| Item on the scale | Expected |
+|---|---|
+| Somersby, empty can | Pending review (weight). Reject it in the staff dashboard |
+| Somersby, full can | Approved (weight + AI match) |
+| Sneakers, one shoe in the box | Pending review (weight and AI). Reject it |
+| Sneakers, both shoes | Approved (this exact photo pair was not in the AI test) |
+| CeraVe, pump removed | Probably **approved**: known AI gap, see [ai-evaluation.md](ai-evaluation.md) |
+
+In the staff dashboard, the "AI photo check" row must show source
+`bedrock:ca.amazon.nova-lite-v1:0` with the model's reason. The log group
+`/ecs/autorefund-dev-core-api` must have a line
+`Bedrock ca.amazon.nova-lite-v1:0: <ms> ms, <n> input tokens, ...` per return.
+If the row says "Image check failed" instead, the logs show the AWS error,
+for example a missing permission.
 
 **Rotating the admin password after restart** (built and tested locally
 this cycle, never run against the cloud): once seeded,
