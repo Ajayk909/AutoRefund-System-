@@ -38,6 +38,9 @@ def app(tmp_path):
         "SQLALCHEMY_DATABASE_URI": TEST_DATABASE_URL,
         "CAPTURE_DIR": tmp_path / "captures",
         "TESTING": True,
+        # Never the real AI, even if the developer's .env switches it on:
+        # tests must not call AWS. Tests that need a verifier set their own.
+        "IMAGE_VERIFIER": "none",
         # Not a Core API setting: it configures the test kiosk agent's identity
         # (see tests/kiosk_harness.py). Tests change it to "move" the kiosk.
         "KIOSK_ID": "KIOSK-001",
