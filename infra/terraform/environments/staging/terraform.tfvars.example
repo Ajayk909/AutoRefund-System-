@@ -4,3 +4,7 @@
 
 allowed_ingress_cidrs = ["203.0.113.5/32"]
 alarm_email           = "you@example.com"
+
+# GitHub's numeric IDs: gh api repos/<owner>/<repo> --jq ".owner.id, .id"
+github_repo_owner_id = "000000000"
+github_repo_id       = "0000000000"

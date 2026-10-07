@@ -77,6 +77,22 @@ variable "github_repo" {
   default = "Ajayk909/AutoRefund-System-"
 }
 
+# GitHub's numeric IDs for the repo owner and the repo (see the same
+# variables in environments/dev). Real values go in terraform.tfvars (not
+# committed). The placeholders match no repository, so a trust policy built
+# from them would let nobody in.
+variable "github_repo_owner_id" {
+  type        = string
+  description = "Set in terraform.tfvars (not committed). Never applied in Phase 3 - only needed for `terraform plan` to succeed."
+  default     = "000000000"
+}
+
+variable "github_repo_id" {
+  type        = string
+  description = "Set in terraform.tfvars (not committed). Never applied in Phase 3 - only needed for `terraform plan` to succeed."
+  default     = "0000000000"
+}
+
 variable "github_branch" {
   type    = string
   default = "main"

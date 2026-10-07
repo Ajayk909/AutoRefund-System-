@@ -95,11 +95,13 @@ module "github_oidc" {
   source = "../../modules/github_oidc"
   count  = var.apply_allowed ? 1 : 0
 
-  project       = var.project
-  environment   = var.environment
-  github_repo   = var.github_repo
-  github_branch = var.github_branch
-  aws_region    = var.aws_region
+  project              = var.project
+  environment          = var.environment
+  github_repo          = var.github_repo
+  github_repo_owner_id = var.github_repo_owner_id
+  github_repo_id       = var.github_repo_id
+  github_branch        = var.github_branch
+  aws_region           = var.aws_region
 
   ecr_repository_arn                = module.ecr[0].repository_arn
   ecs_cluster_arn                   = module.ecs_service[0].cluster_arn
