@@ -68,7 +68,7 @@ with app.app_context():
     cerave = setup.create_product(retailer, "3606000611467", "CeraVe Acne Control Cleanser",
                                   416, "17.99", category="Personal Care")
     shoes = setup.create_product(retailer, "197967194818",
-                                 "New Balance 2002R Shoes (Black/Grey, US 8)", 898, "199.99",
+                                 "Navy/White Sneakers (in New Balance box)", 898, "199.99",
                                  category="Footwear")
 
     print("Adding receipts...")
