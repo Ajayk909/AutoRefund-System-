@@ -14,7 +14,7 @@ before changing the backend.
 | 1 | Domain structure + tenant-ready database | Done |
 | 2 | Windows kiosk agent + Core API boundary | Done |
 | **3** | **Cloud (AWS) deployment, S3 evidence, CI/CD** | **Done** |
-| 4 | AI verification | In progress: verifier slot + verification signals done; no real AI yet |
+| 4 | AI verification | In progress: Amazon Bedrock photo check added, off by default (`IMAGE_VERIFIER=bedrock`); results in [ai-evaluation.md](ai-evaluation.md) |
 | Later | Cognito, retailer integrations | Not started |
 
 Three programs run on the kiosk PC in local development. In the AWS dev
@@ -495,4 +495,4 @@ receipt number, because Phase 0 cannot store that.
 | Automatic outbox re-sending | Would act without the customer present | Not planned for returns |
 | Moving all UI flow state into the agent | Screens still keep display data in localStorage (no personal data) | When the UI is reworked |
 | Heartbeats / fleet monitoring | Only `/api/kiosk/status` locally | Monitoring phase |
-| A real AI verifier, POS, payments | The AI slot exists (`NoAIVerifier` is the only verifier); POS and payments are out of scope so far | Phase 4 (AI); later (POS, payments) |
+| A reliable AI verifier, POS, payments | `BedrockVerifier` exists but misses small missing parts (see [ai-evaluation.md](ai-evaluation.md)); POS and payments are out of scope so far | Phase 4 (AI); later (POS, payments) |
