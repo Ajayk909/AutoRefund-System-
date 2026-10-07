@@ -86,6 +86,9 @@ AI = "ai"
 # decide() looks at signals in this order, so the reason a return goes to
 # review is always the same for the same checks.
 SIGNAL_ORDER = (BARCODE, WEIGHT, PHOTO, AI)
+# The customer sees the decision reason. The AI's own words ("the pump is
+# missing") are for staff only, and are saved with the AI signal.
+AI_REVIEW_REASON = "We need an employee to review this return"
 
 
 @dataclass(frozen=True)
@@ -138,7 +141,7 @@ def decide(signals: list[Signal], policy: ReturnPolicy) -> tuple[str, str]:
     """
     for signal in sorted(signals, key=lambda s: SIGNAL_ORDER.index(s.signal_type)):
         if _counts(signal, policy) and signal.result != MATCH:
-            return PENDING_REVIEW, signal.reason
+            return PENDING_REVIEW, AI_REVIEW_REASON if signal.signal_type == AI else signal.reason
     if not any(s.signal_type == WEIGHT and s.result == MATCH for s in signals):
         return PENDING_REVIEW, "Weight was not checked"
     return APPROVED, "Weight matched expected product tolerance"

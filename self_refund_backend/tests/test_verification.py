@@ -167,7 +167,8 @@ def test_weight_mismatch_goes_to_review():
 @pytest.mark.parametrize("ai_result", [MISMATCH, UNCERTAIN])
 def test_real_ai_mismatch_or_uncertain_goes_to_review(ai_result):
     signals = [_weight(True), rules.photo_signal(True), _real_ai(ai_result, "Not sure it's a can")]
-    assert rules.decide(signals, PHOTO_REQUIRED) == (PENDING_REVIEW, "Not sure it's a can")
+    # The customer gets a neutral reason; the AI's words stay on its signal.
+    assert rules.decide(signals, PHOTO_REQUIRED) == (PENDING_REVIEW, rules.AI_REVIEW_REASON)
 
 
 def test_no_ai_configured_does_not_change_the_decision():
@@ -256,7 +257,7 @@ def test_ai_mismatch_sends_the_return_to_review(client, app, staff_headers):
     refund = _submit(client, tx, _item(tx, "111111"), 250).get_json()["refund"]
     assert refund["decision_status"] == "pending_review"
     assert refund["weight_match"] is True
-    assert refund["decision_reason"] == "Photo shows chips, not a can"
+    assert refund["decision_reason"] == rules.AI_REVIEW_REASON  # what the customer sees
 
     # Staff see every check, in the order the rules read them.
     pending = client.get("/api/refunds/pending", headers=staff_headers).get_json()["refunds"]
@@ -280,7 +281,8 @@ def test_crashing_verifier_sends_the_return_to_review(client, app):
     r = _submit(client, tx, _item(tx, "111111"), 250)
     assert r.status_code == 201  # the customer still gets an answer
     assert r.get_json()["refund"]["decision_status"] == "pending_review"
-    assert r.get_json()["refund"]["decision_reason"] == "Image check failed"
+    assert r.get_json()["refund"]["decision_reason"] == rules.AI_REVIEW_REASON
+    assert _signals_of(r.get_json()["refund"])["ai"].reason == "Image check failed"
 
 
 def test_slow_verifier_sends_the_return_to_review(client, app):
@@ -292,7 +294,8 @@ def test_slow_verifier_sends_the_return_to_review(client, app):
     finally:
         app.image_verifier.release.set()
     assert refund["decision_status"] == "pending_review"
-    assert refund["decision_reason"] == "Image check took too long"
+    assert refund["decision_reason"] == rules.AI_REVIEW_REASON
+    assert _signals_of(refund)["ai"].reason == "Image check took too long"
 
 
 def test_real_verifier_is_not_called_without_a_photo(client, app):
