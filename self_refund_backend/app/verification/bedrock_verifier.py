@@ -118,6 +118,8 @@ def answer_to_result(text: str) -> VerificationResult:
 
     reason = answer["reason"].strip()
     if item:
+        if reason and not reason.endswith((".", "!", "?")):
+            reason += "."  # so the model's sentence doesn't run into ours
         reason += f" Kiosk photo shows: {item}."
     # The model only says high/medium/low, so we keep that word for staff
     # instead of inventing a percentage.

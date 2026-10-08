@@ -126,7 +126,8 @@ def test_customer_message_without_an_item_phrase():
 
 @pytest.mark.parametrize("raw, clean", [
     ("a bottle of face wash.", "a bottle of face wash"),
-    ("<b>a *shiny*\n can</b>", "ba shiny canb"),  # no markup or line breaks
+    ("Navy/White Sneakers", "Navy/White Sneakers"),  # a real Nova Lite answer
+    ("<b>a *shiny*\n can</b>", "ba shiny can/b"),  # no markup or line breaks
     ("x" * 100, "x" * 60),
     ("  ", None),
     (None, None),

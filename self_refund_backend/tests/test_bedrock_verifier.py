@@ -117,6 +117,13 @@ def test_kiosk_item_is_kept_and_shown_to_staff():
                              "(AI confidence: high)")
 
 
+def test_reason_without_a_full_stop_does_not_run_into_the_kiosk_item():
+    # A real Nova Lite reply ended without a full stop.
+    answer = _check(_reply(reason="matches the reference photo", item="a can of cider"))
+    assert answer.reason == ("matches the reference photo. Kiosk photo shows: a can of cider. "
+                             "(AI confidence: high)")
+
+
 def test_missing_kiosk_item_is_fine():
     answer = _check(_reply(same=False))
     assert answer.different_product is True and answer.detected_item is None

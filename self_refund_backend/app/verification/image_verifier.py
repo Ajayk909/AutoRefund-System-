@@ -137,7 +137,7 @@ def plain_item(text) -> str | None:
     see it, so only letters, digits, spaces and simple punctuation are kept."""
     if not isinstance(text, str):
         return None
-    text = re.sub(r"[^\w\s',.&()-]", "", text)
+    text = re.sub(r"[^\w\s',.&()/-]", "", text)
     text = " ".join(text.split()).strip(" .")
     return text[:MAX_ITEM_LENGTH].strip() or None
 
