@@ -158,6 +158,17 @@ def test_browser_values_are_not_forwarded(agent, fake_core, devices):
                              "receipt_number", "product_id", "barcode"}
 
 
+def test_weight_rechecked_is_forwarded_and_the_answer_passed_back(agent, fake_core):
+    import json
+    fake_core.routes[RETURN] = (409, {"success": False, "code": "WEIGHT_CHECK_AGAIN",
+                                      "message": "Please place the item again."})
+    r = submit(agent, weight_rechecked=True)
+    metadata = json.loads(next(c for c in fake_core.calls if c["path"] == "/api/kiosk/returns")
+                          ["data"]["metadata"])
+    assert metadata["weight_rechecked"] is True
+    assert r.status_code == 409 and r.get_json()["code"] == "WEIGHT_CHECK_AGAIN"
+
+
 @pytest.mark.parametrize("answer,code", [
     ((401, {"code": "DEVICE_AUTH_FAILED"}), "KIOSK_NOT_CONFIGURED"),
     ((403, {"code": "KIOSK_DISABLED"}), "KIOSK_DISABLED"),
