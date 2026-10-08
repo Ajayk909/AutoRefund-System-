@@ -149,19 +149,22 @@ def decide(signals: list[Signal], policy: ReturnPolicy) -> tuple[str, str]:
     """Automatic outcome from the verification signals.
 
     A check with a decline_message declines the return straight away
-    (rejected, by the system). Any other check that isn't a clear "match"
-    sends the return to an employee. Only a matching weight can approve: a
-    photo or an AI "match" on its own never does, because the weight is the
-    one check we fully trust.
+    (rejected, by the system). The AI may only decline when the weight
+    matched: if the weight is a bit off too, a person should look. Any other
+    check that isn't a clear "match" sends the return to an employee. Only a
+    matching weight can approve: a photo or an AI "match" on its own never
+    does, because the weight is the one check we fully trust.
     """
+    weight_matched = any(s.signal_type == WEIGHT and s.result == MATCH for s in signals)
     ordered = sorted(signals, key=lambda s: SIGNAL_ORDER.index(s.signal_type))
     for signal in ordered:
-        if signal.decline_message and _counts(signal, policy):
+        may_decline = signal.signal_type != AI or weight_matched
+        if signal.decline_message and _counts(signal, policy) and may_decline:
             return REJECTED, signal.decline_message
     for signal in ordered:
         if _counts(signal, policy) and signal.result != MATCH:
             return PENDING_REVIEW, AI_REVIEW_REASON if signal.signal_type == AI else signal.reason
-    if not any(s.signal_type == WEIGHT and s.result == MATCH for s in signals):
+    if not weight_matched:
         return PENDING_REVIEW, "Weight was not checked"
     return APPROVED, "Weight matched expected product tolerance"
 

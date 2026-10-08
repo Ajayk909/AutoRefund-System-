@@ -13,8 +13,8 @@ from types import SimpleNamespace
 
 from app.models import Refund
 from app.returns import rules
-from app.returns.states import REJECTED
-from app.verification.image_verifier import MATCH
+from app.returns.states import PENDING_REVIEW, REJECTED
+from app.verification.image_verifier import MATCH, MISMATCH
 from tests.test_verification import PHOTO_REQUIRED, FixedVerifier, _real_ai, _signals_of
 from tests.test_workflows import _item, _submit, _transaction
 
@@ -36,6 +36,23 @@ def test_a_far_off_weight_declines_even_if_the_ai_says_match():
     weight = rules.weight_signal({"match": False, "far_off": True})
     signals = [weight, rules.photo_signal(True), _real_ai(MATCH)]
     assert rules.decide(signals, PHOTO_REQUIRED) == (REJECTED, rules.WEIGHT_DECLINE_MESSAGE)
+
+
+def _ai_decline():
+    return rules.Signal(rules.AI, MISMATCH, "Different product", "bedrock:test",
+                        decline_message="Please visit the customer service desk.")
+
+
+def test_the_ai_can_decline_when_the_weight_matched():
+    signals = [rules.weight_signal({"match": True, "far_off": False}),
+               rules.photo_signal(True), _ai_decline()]
+    assert rules.decide(signals, PHOTO_REQUIRED) == (REJECTED, "Please visit the customer service desk.")
+
+
+def test_the_ai_cannot_decline_when_the_weight_is_slightly_off():
+    signals = [rules.weight_signal({"match": False, "far_off": False}),
+               rules.photo_signal(True), _ai_decline()]
+    assert rules.decide(signals, PHOTO_REQUIRED) == (PENDING_REVIEW, "Weight outside allowed tolerance")
 
 
 # --- real returns through the kiosk agent (database) ------------------------------
