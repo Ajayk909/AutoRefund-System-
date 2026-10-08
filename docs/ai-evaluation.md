@@ -286,6 +286,30 @@ check (vs ~$0.0045 with one kiosk photo).
 missing pump stays a known limit (see above) and we stop experimenting.
 The app keeps one kiosk reference photo and one kiosk photo per check.
 
+## Experiment: describe the kiosk photo first (2026-10-08)
+
+Last pump idea, Claude Haiku 4.5, one call per step (throwaway script).
+
+- **Step 1:** only the kiosk photo and the product name, no reference, and
+  a neutral question: "List the visible parts of this item and describe
+  the top of the bottle. Is anything that normally belongs on this product
+  missing?"
+- **Step 2:** the same conversation continues with the reference photo and
+  the normal prompt v3 question.
+
+| Kiosk photo | Should be | Step 1 alone | Steps 1 + 2 |
+|---|---|---|---|
+| `cerave_nopump.jpg` | pump missing | ✅ "simple white screw-on cap... the pump dispenser appears to be missing" | ✅ mismatch (pump missing) |
+| `cerave_nopump_close.jpg` | pump missing | ❌ sees a "white pump dispenser"; says a "protective pump cap" is missing (no such part) | ⚠️ mismatch, for the wrong reason (the made-up cap) |
+| `MAIN/Cerave.jpg` (with pump) | nothing missing | ❌ sees the pump, then says the made-up cap is missing | ❌ mismatch (medium): a complete item goes to review |
+
+The two steps take 5.1–6.0 s together (more than the 5-second timeout) and
+cost about $0.008 per check. Asking "is anything missing?" makes the model
+name a missing part even on a complete item.
+
+**Result:** the pump experiments stop here. The missing pump is a known
+limit (see above).
+
 ## Decision (2026-10-08): Claude Haiku 4.5
 
 - **Default model in dev:** `us.anthropic.claude-haiku-4-5-20251001-v1:0`
