@@ -75,7 +75,8 @@ All 12 calls together cost less than half a US cent.
   Its `us.` profile also sends the photos to the US instead of keeping them
   in Canada.
 - **The AI never approves alone:** only a weight match can approve. In test 3
-  the weight is far too low anyway, so that return goes to review either way.
+  the weight is far too low anyway, so the kiosk declines that return on
+  weight (more than `WEIGHT_DECLINE_PERCENT` off).
   In test 2 the weight passes, so the AI's wrong "match" means **the return is
   approved**. That case is not caught yet.
 - **This is a small test:** 4 photos, one call each, so it is not a full
@@ -83,10 +84,83 @@ All 12 calls together cost less than half a US cent.
 
 ## Decision for now
 
-- **Default model:** stays `ca.amazon.nova-lite-v1:0` with prompt v2: best
+- **Default model:** stays `ca.amazon.nova-lite-v1:0` with prompt v3: best
   result, cheapest, and the photos stay in Canada.
-- **Default setting:** `IMAGE_VERIFIER` stays `none` until we switch it on.
+- **Default setting:** `IMAGE_VERIFIER` stays `none` locally (`.env.example`);
+  in dev it is switched on (`bedrock`) through Terraform.
 - **Ideas for the missing-pump case** (not done yet):
   - a reference photo that shows the pump close up;
   - asking about the parts of each product specifically;
   - testing a stronger model.
+
+## Prompt v3 and automatic declines (2026-10-08)
+
+Since this cycle the kiosk may decline a return on its own in obvious cases
+(rules in `self_refund_backend/app/returns/rules.py`). For the AI that means:
+
+- **v3:** the model first says what the kiosk photo shows (`kiosk_item`, a
+  few words), then the `differences`. `same_product` now means a different
+  *kind* of product; a missing part or damage does not count.
+- Only a high-confidence "different product", with no missing part or
+  damage, may decline, and only when the weight matched. The customer then
+  sees the AI's item phrase (at most 60 characters, plain text), e.g. "This
+  doesn't look like <product>. It looks like <item>."
+- A missing part, damage, medium/low confidence or an AI error still send
+  the return to an employee.
+
+### How to run it
+
+From `self_refund_backend`:
+
+    .\.venv\Scripts\python.exe evaluate_ai.py <model-id>
+
+It uses the app's own `BedrockVerifier` (same prompt, same 5-second
+timeout) on the photos in the `camera` folder next to the repo (`MAIN/` =
+reference photos, `test/` = kiosk photos). Each run makes 4 real, paid
+Bedrock calls.
+
+### Results
+
+"Kiosk should" assumes the weight matched, so it shows what the AI alone
+decides.
+
+| Test | Kiosk should | Nova Lite + v3 | AI's `kiosk_item` |
+|---|---|---|---|
+| 1 Somersby OK | approve | ✅ approve (match, high) | a can of cider |
+| 2 CeraVe, no pump | review | ❌ approve (match, high) | CeraVe Acne Control Cleanser |
+| 3 One shoe in box | review ¹ | ✅ review (missing part, high) | NavyWhite Sneakers (in New Balance box) ² |
+| 4 CeraVe vs Somersby reference | decline | ✅ decline (different product, high) | bottle of CeraVe Acne Control Cleanser |
+| **Correct** | | **3 / 4** | |
+
+¹ With the real one-shoe box the weight is about 75% too low, so the kiosk
+declines it on weight before the AI is asked.
+² This run removed the "/" from the phrase; the code keeps it since
+commit `5750c6c`.
+
+| Run | Model ID | Region | Time per check | Input tokens | Output tokens | Cost per check |
+|---|---|---|---|---|---|---|
+| Nova Lite + v3 | `ca.amazon.nova-lite-v1:0` | ca-central-1 | 1.1–1.6 s | ~4,473 | 67–106 | ~$0.00029 |
+
+### What we learned (v3)
+
+- **Wrong product:** detected again, now flagged as a different product
+  with high confidence, so the kiosk declines it. The AI read the label of
+  the real item ("CeraVe"), which was not in the prompt.
+- **The missing pump:** still not noticed. The model answered "match" with
+  high confidence, so with a matching weight **this return is approved**.
+  Same as v1 and v2.
+- **One shoe:** correctly a missing part, not a different product, so the AI
+  alone would send it to review, not decline it.
+- **The item phrase:** for the correct product the model often repeats the
+  product name from the prompt instead of describing the photo (tests 2 and
+  3). It also leaves out "a" sometimes ("It looks like bottle of ...").
+
+### Claude Haiku 4.5: not run yet
+
+Blocked for now: the AWS account is on the Free plan, so the Bedrock
+Marketplace agreement for Anthropic models is not available, and the
+Anthropic use-case form is not filled in yet.
+
+Note for the comparison: Claude Haiku 4.5 on Bedrock is only available
+through the `us.` or `global.` inference profiles, so **the photos are
+processed in the US**. Nova Lite's `ca.` profile keeps them in Canada.
