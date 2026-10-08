@@ -1,5 +1,6 @@
 // Shows the checks the Core API made on a return (barcode, weight, photo,
-// AI photo check) so an employee can see why it was sent to review.
+// AI photo check) so an employee can see why it was sent to review or
+// declined by the kiosk.
 // Staff screens only: customers never see these details.
 import "./VerificationSignals.css";
 

@@ -57,12 +57,18 @@ function RefundResultPage() {
   const declined = result.decision_status === "rejected";
   const view = approved
     ? { accent: "#10fbc4", icon: "✓", eyebrow: "🎉 Refund Approved!", title: "You're all set!", status: "✓ Approved", verification: "Auto-approved",
-        subtitle: "Your return has been approved. Your refund will be issued to your original payment method." }
+        subtitle: "Your return has been approved. Your refund will be issued to your original payment method.",
+        nextIcon: "📬", nextTitle: "What happens next",
+        next: `Your refund of $${result.refund_amount} will be returned to your original payment method within 3–5 business days. You'll receive a confirmation email shortly.` }
     : declined
     ? { accent: "#f87171", icon: "✕", eyebrow: "Return not accepted", title: "Please visit customer service", status: "✕ Declined", verification: "Declined at kiosk",
-        subtitle: result.decision_reason }
+        subtitle: result.decision_reason,
+        nextIcon: "👤", nextTitle: "What to do next",
+        next: "Please take the item and your receipt to the customer service desk. A team member will help you there. Nothing has been refunded." }
     : { accent: "#fbbf24", icon: "⏳", eyebrow: "⏳ Under Review", title: "Almost there", status: "⏳ Pending review", verification: "Manual review",
-        subtitle: "Your return has been submitted and is waiting for a quick employee review." };
+        subtitle: "Your return has been submitted and is waiting for a quick employee review.",
+        nextIcon: "👤", nextTitle: "What to expect",
+        next: "A staff member will review your request, usually within 24 hours. You'll be notified by email once a decision is made. No further action needed from you." };
   const accent = view.accent;
 
   const resetAndGoHome = () => {
@@ -118,8 +124,9 @@ function RefundResultPage() {
               { label: "Expected Weight", val: `${result.expected_weight_grams} g` },
               { label: "Measured Weight", val: `${result.measured_weight_grams} g` },
               { label: "Verification", val: view.verification, color: accent },
-              { label: "Decision Reason", val: result.decision_reason },
-            ].map((d, i) => (
+              // A declined return already shows its reason as the subtitle above.
+              { label: "Decision Reason", val: result.decision_reason, hide: declined },
+            ].filter((d) => !d.hide).map((d, i) => (
               <div key={i} className="rr2-detail-card">
                 <span>{d.label}</span>
                 <strong style={d.color ? { color: d.color } : {}}>{d.val}</strong>
@@ -129,11 +136,11 @@ function RefundResultPage() {
 
           {/* Next steps */}
           <div className="rr2-next-card" style={{ borderColor: `${accent}22`, background: `${accent}06` }}>
-            <div className="rr2-next-icon">{approved ? "📬" : "👤"}</div>
+            <div className="rr2-next-icon">{view.nextIcon}</div>
             <div className="rr2-next-body">
-              <div className="rr2-next-title" style={{ color: accent }}>{approved ? "What happens next" : "What to expect"}</div>
+              <div className="rr2-next-title" style={{ color: accent }}>{view.nextTitle}</div>
               <p className="rr2-next-desc">
-                {approved ? `Your refund of $${result.refund_amount} will be returned to your original payment method within 3–5 business days. You'll receive a confirmation email shortly.` : "A staff member will review your request, usually within 24 hours. You'll be notified by email once a decision is made. No further action needed from you."}
+                {view.next}
               </p>
             </div>
           </div>

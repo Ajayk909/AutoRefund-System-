@@ -4,6 +4,7 @@ import Layout from "../../components/Layout";
 import PageWrapper from "../../components/PageWrapper";
 import api, { errorMessage } from "../../services/api";
 import EvidenceImage from "../../components/EvidenceImage";
+import VerificationSignals from "../../components/VerificationSignals";
 import useStaffGuard from "../../hooks/useStaffGuard";
 
 function KioskShell() {
@@ -137,6 +138,7 @@ function RefundLogsPage() {
                       <div><strong>{log.item_name}</strong></div>
                       <div>
                         <span className={`rl-status rl-${statusClass(log.decision_status)}`}>{log.decision_status}</span>
+                        {log.decision_status === "rejected" && !log.reviewed_by && <span style={{ color: "#6882a8", fontSize: 12, marginLeft: 8 }}>by kiosk</span>}
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ color: "#c9d8f0", fontSize: 13 }}>{log.refund_date ? new Date(log.refund_date).toLocaleString() : "N/A"}</span>
@@ -151,6 +153,13 @@ function RefundLogsPage() {
                           <span>Weight: {log.measured_weight_grams} g (expected {log.expected_weight_grams} g)</span>
                           <span>Reason: {log.decision_reason || "—"}</span>
                           {log.reviewed_by && <span>Reviewed by: {log.reviewed_by}</span>}
+                          {/* A rejection with no staff member was decided by the kiosk itself. */}
+                          {log.decision_status === "rejected" && !log.reviewed_by && (
+                            <>
+                              <span>Declined automatically by the kiosk</span>
+                              <VerificationSignals signals={log.verification_signals} />
+                            </>
+                          )}
                           {log.payment_reference && <span>POS refund ref: {log.payment_reference}</span>}
                           {log.decision_status === "approved" && (
                             <button className="primary-btn" style={{ width: "fit-content" }} onClick={(e) => { e.stopPropagation(); markRefunded(log.refund_id); }}>Mark refunded at POS</button>
