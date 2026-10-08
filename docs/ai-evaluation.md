@@ -238,6 +238,54 @@ than the weight tolerance (10%, about 42 g for this 416 g product). A product no
 do not add per-product notes for now. Staff can still see the kiosk photo of
 every return.
 
+## Experiment: more reference photos and a close-up (2026-10-08)
+
+Two more ideas for the missing pump, tested with Claude Haiku 4.5 (`us.`
+profile called from ca-central-1, prompt v3 unchanged, throwaway scripts,
+not in the app). The crop is the middle 50% of the photo's width at full
+height: cropping the height as well would cut the top of the pump off.
+
+**A and B: an official product photo as a second reference.** The official
+photos were downloaded from the manufacturer/retailer site. In B the kiosk
+photo was also replaced by its crop. One call each.
+
+| Kiosk photo | Should be | A: kiosk reference + official photo | B: A, with the cropped kiosk photo |
+|---|---|---|---|
+| `cerave_nopump.jpg` | review | ❌ match | ✅ mismatch (pump missing) |
+| `cerave_nopump_close.jpg` | review | ❌ match | ❌ match |
+| `MAIN/Cerave.jpg` (with pump) | match | ✅ match | ✅ match |
+| `somersby_ok.jpg` | match | ❌ **different product** | ❌ **different product** |
+
+Time 1.5–2.4 s, about $0.005–0.006 per check.
+
+**A reference photo must show the exact packaging the store sells.** The
+official Somersby photo shows the newer English "BLACKBERRY" label; our can
+has the bilingual "Cidre aromatisé MÛRE" label (mûre is French for
+blackberry). Haiku answered "Mûre (Mulberry), not the Blackberry variant"
+with high confidence, so with a matching weight the kiosk would **decline
+a correct item**. A re-run gave the same answer. So: no official or
+marketing photos as references, only photos of the packaging we sell.
+
+**C: the full kiosk photo plus a close-up.** Only the kiosk reference
+photo. The kiosk photo is sent twice: the full photo, then its crop with
+the text "Close-up of the same kiosk photo (the middle part of the photo
+above, enlarged)". The full photo keeps big items safe (the crop cuts the
+shoe box off). Each test was run twice.
+
+| Kiosk photo | Should be | Run 1 | Run 2 |
+|---|---|---|---|
+| `cerave_nopump.jpg` | review | ❌ match ("intact pump") | ❌ match |
+| `cerave_nopump_close.jpg` | review | ❌ match | ❌ match |
+| `MAIN/Cerave.jpg` (with pump) | match | ✅ match | ✅ match |
+| `nb_emptybox.jpg` (one shoe) | review, not a different product | ✅ missing part | ✅ missing part |
+
+Time 1.5–2.7 s, ~4,800 input / 113–120 output tokens, about $0.0059 per
+check (vs ~$0.0045 with one kiosk photo).
+
+**Result:** none of these catches the missing pump reliably, so the
+missing pump stays a known limit (see above) and we stop experimenting.
+The app keeps one kiosk reference photo and one kiosk photo per check.
+
 ## Decision (2026-10-08): Claude Haiku 4.5
 
 - **Default model in dev:** `us.anthropic.claude-haiku-4-5-20251001-v1:0`
