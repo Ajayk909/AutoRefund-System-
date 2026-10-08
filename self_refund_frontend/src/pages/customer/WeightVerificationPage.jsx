@@ -37,6 +37,8 @@ function WeightVerificationPage() {
   // One key per return attempt: a retry after a network error reuses it, so
   // the backend returns the same refund instead of creating a second one.
   const attemptKeyRef = useRef(newAttemptKey());
+  // True after the backend asked the customer to place the item again once.
+  const weightRecheckedRef = useRef(false);
   const [capturedImageName, setCapturedImageName] = useState("");
   const navigate = useNavigate();
   const captureInProgressRef = useRef(false);
@@ -51,6 +53,7 @@ function WeightVerificationPage() {
   useEffect(() => {
     setCaptureId(""); setCapturedImageName(""); setCameraError(""); setDisplayPreviewUrl(`${backendBase}/api/camera/stream`);
     attemptKeyRef.current = newAttemptKey();
+    weightRecheckedRef.current = false;
   }, [backendBase, item?.product_id, item?.barcode, transaction?.receipt_number]);
 
   useEffect(() => {
@@ -90,7 +93,7 @@ function WeightVerificationPage() {
       if (!finalCaptureId) { const captured = await captureImage(); if (captured?.capture_id) finalCaptureId = captured.capture_id; }
       // The weight shown on screen is for guidance only: the kiosk agent reads
       // the scale itself when the return is submitted.
-      const payload = { transaction_id: transaction.transaction_id, item_id: item.item_id, product_id: item.product_id, quantity: 1, capture_id: finalCaptureId || undefined };
+      const payload = { transaction_id: transaction.transaction_id, item_id: item.item_id, product_id: item.product_id, quantity: 1, capture_id: finalCaptureId || undefined, weight_rechecked: weightRecheckedRef.current };
       const res = await agent.post("/refunds/start", payload, { headers: { "Idempotency-Key": attemptKeyRef.current } });
       if (!res.data?.success) throw new Error(res.data?.message || "Refund request failed");
       localStorage.setItem("refundResult", JSON.stringify(res.data.refund));
@@ -101,6 +104,11 @@ function WeightVerificationPage() {
       // second return. A definite answer (e.g. item already returned) gets a new key.
       const outcomeUnknown = !err?.response || err.response.data?.code === "CORE_UNAVAILABLE";
       if (!outcomeUnknown) attemptKeyRef.current = newAttemptKey();
+      if (err?.response?.data?.code === "WEIGHT_CHECK_AGAIN") {
+        // The agent used up the photo; take a fresh one of the re-placed item.
+        weightRecheckedRef.current = true;
+        setCaptureId(""); setCapturedImageName(""); setDisplayPreviewUrl(`${backendBase}/api/camera/stream`);
+      }
       alert(agentErrorMessage(err, "We couldn't submit your return right now. Nothing has been refunded. Please try again."));
     } finally { setLoading(false); }
   };

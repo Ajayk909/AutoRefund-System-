@@ -95,6 +95,9 @@ class Config:
     # Without a photo, a weight match goes to employee review instead of
     # being approved automatically.
     REQUIRE_PHOTO_FOR_AUTO_APPROVAL = _bool("REQUIRE_PHOTO_FOR_AUTO_APPROVAL", True)
+    # A weight this many percent away from the expected weight is clearly a
+    # different item: after one "place it again", the kiosk declines the return.
+    WEIGHT_DECLINE_PERCENT = _int("WEIGHT_DECLINE_PERCENT", 40)
 
     # --- AI photo verification (Phase 4) ---------------------------------------
     # Which image verifier checks the item photo. "none" = no AI: nothing is

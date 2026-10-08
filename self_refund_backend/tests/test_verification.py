@@ -135,13 +135,13 @@ def test_verify_safely_shortens_a_very_long_reason():
 
 # --- decide() -------------------------------------------------------------------
 PHOTO_REQUIRED = ReturnPolicy(window_days=30, retry_limit_after_rejection=1,
-                              require_photo_for_auto_approval=True)
+                              require_photo_for_auto_approval=True, weight_decline_percent=40)
 PHOTO_OPTIONAL = ReturnPolicy(window_days=30, retry_limit_after_rejection=1,
-                              require_photo_for_auto_approval=False)
+                              require_photo_for_auto_approval=False, weight_decline_percent=40)
 
 
-def _weight(match):
-    return rules.weight_signal({"match": match})
+def _weight(match, far_off=False):
+    return rules.weight_signal({"match": match, "far_off": far_off})
 
 
 def _real_ai(result, reason="AI says so"):
@@ -270,7 +270,7 @@ def test_ai_mismatch_sends_the_return_to_review(client, app, staff_headers):
 def test_ai_match_cannot_approve_a_wrong_weight(client, app):
     app.image_verifier = FixedVerifier(MATCH, 1.0)
     tx = _transaction(client)
-    refund = _submit(client, tx, _item(tx, "222222"), 999).get_json()["refund"]
+    refund = _submit(client, tx, _item(tx, "222222"), 180).get_json()["refund"]
     assert refund["decision_status"] == "pending_review"
     assert refund["decision_reason"] == "Weight outside allowed tolerance"
 

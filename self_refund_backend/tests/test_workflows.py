@@ -101,7 +101,7 @@ def test_weight_tolerance_boundaries(client):
 
 def test_weight_mismatch_goes_to_review(client, staff_headers):
     tx = _transaction(client)
-    r = _submit(client, tx, _item(tx, "222222"), 400)
+    r = _submit(client, tx, _item(tx, "222222"), 180)
     assert r.status_code == 201
     refund = r.get_json()["refund"]
     assert refund["decision_status"] == "pending_review"
@@ -155,8 +155,8 @@ def test_fake_image_path_is_not_stored(client, app):
 
 def test_employee_approve_and_reject(client, staff_headers):
     tx = _transaction(client)
-    a = _submit(client, tx, _item(tx, "111111"), 10).get_json()["refund"]
-    b = _submit(client, tx, _item(tx, "222222"), 10).get_json()["refund"]
+    a = _submit(client, tx, _item(tx, "111111"), 200).get_json()["refund"]
+    b = _submit(client, tx, _item(tx, "222222"), 180).get_json()["refund"]
     assert a["decision_status"] == b["decision_status"] == "pending_review"
 
     h = staff_headers

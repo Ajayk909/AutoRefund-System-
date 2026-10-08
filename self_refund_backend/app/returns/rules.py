@@ -66,15 +66,18 @@ def line_eligibility(transaction, transaction_item, policy):
 
 
 # --- Weight ------------------------------------------------------------------
-def weight_check(product, quantity, measured):
+def weight_check(product, quantity, measured, decline_percent):
     expected = Decimal(str(product.expected_weight_grams)) * quantity
     tolerance = Decimal(str(product.weight_tolerance_percent or 0))
     allowed = expected * tolerance / Decimal("100")
+    far = expected * Decimal(decline_percent) / Decimal("100")
     return {
         "expected": expected,
         "min": expected - allowed,
         "max": expected + allowed,
         "match": expected - allowed <= measured <= expected + allowed,
+        # So far off that it can't be the right item (e.g. an empty can).
+        "far_off": abs(measured - expected) > far,
     }
 
 
@@ -89,6 +92,9 @@ SIGNAL_ORDER = (BARCODE, WEIGHT, PHOTO, AI)
 # The customer sees the decision reason. The AI's own words ("the pump is
 # missing") are for staff only, and are saved with the AI signal.
 AI_REVIEW_REASON = "We need an employee to review this return"
+# Polite on purpose: a declined customer is sent to a person, never accused.
+WEIGHT_DECLINE_MESSAGE = ("This item doesn't match your receipt. "
+                          "Please visit the customer service desk.")
 
 
 @dataclass(frozen=True)
@@ -102,6 +108,10 @@ class Signal:
     # False only for the "no AI configured" placeholder. It is saved so staff
     # can see that no AI looked at the photo, but it must not change the decision.
     is_real_check: bool = True
+    # Set only when this check alone is sure enough for the kiosk to decline
+    # the return. The text is what the customer sees. Not saved: the decline
+    # itself is saved as the return's status and reason.
+    decline_message: str | None = None
 
 
 def barcode_signal(barcode: str | None) -> Signal | None:
@@ -116,6 +126,9 @@ def barcode_signal(barcode: str | None) -> Signal | None:
 def weight_signal(weight: dict) -> Signal:
     if weight["match"]:
         return Signal(WEIGHT, MATCH, "Weight matched expected product tolerance", "weight-rule")
+    if weight["far_off"]:
+        return Signal(WEIGHT, MISMATCH, "Weight far outside the allowed range (declined)",
+                      "weight-rule", decline_message=WEIGHT_DECLINE_MESSAGE)
     return Signal(WEIGHT, MISMATCH, "Weight outside allowed tolerance", "weight-rule")
 
 
@@ -135,11 +148,17 @@ def ai_signal(answer: VerificationResult, verifier: ImageVerifier) -> Signal:
 def decide(signals: list[Signal], policy: ReturnPolicy) -> tuple[str, str]:
     """Automatic outcome from the verification signals.
 
-    Any check that isn't a clear "match" sends the return to an employee.
-    Only a matching weight can approve: a photo or an AI "match" on its own
-    never does, because the weight is the one check we fully trust.
+    A check with a decline_message declines the return straight away
+    (rejected, by the system). Any other check that isn't a clear "match"
+    sends the return to an employee. Only a matching weight can approve: a
+    photo or an AI "match" on its own never does, because the weight is the
+    one check we fully trust.
     """
-    for signal in sorted(signals, key=lambda s: SIGNAL_ORDER.index(s.signal_type)):
+    ordered = sorted(signals, key=lambda s: SIGNAL_ORDER.index(s.signal_type))
+    for signal in ordered:
+        if signal.decline_message and _counts(signal, policy):
+            return REJECTED, signal.decline_message
+    for signal in ordered:
         if _counts(signal, policy) and signal.result != MATCH:
             return PENDING_REVIEW, AI_REVIEW_REASON if signal.signal_type == AI else signal.reason
     if not any(s.signal_type == WEIGHT and s.result == MATCH for s in signals):

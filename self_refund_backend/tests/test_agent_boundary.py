@@ -54,19 +54,19 @@ def test_successful_return_goes_through_agent_with_device_credential(client, app
 
 def test_browser_cannot_supply_hardware_or_identity_values(client, app):
     tx = _transaction(client)
-    app.mock_scale.set_weight(10)
+    app.mock_scale.set_weight(200)
     client.post("/api/refunds/start", json={
         "transaction_id": tx["transaction_id"], "item_id": _item(tx, "111111")["item_id"],
         "measured_weight_grams": 250, "kiosk_id": "KIOSK-OTHER-1", "image_path": "x.jpg",
         "store_id": "s", "retailer_id": "r", "scale": {"weight_grams": 250, "stable": True},
         "camera": {"mock": False}})
     metadata = json.loads(_returns_calls(app)[0]["data"]["metadata"])
-    assert metadata["scale"]["weight_grams"] == 10 and metadata["scale"]["device"] == "mock-scale"
+    assert metadata["scale"]["weight_grams"] == 200 and metadata["scale"]["device"] == "mock-scale"
     assert metadata["camera"]["mock"] is True
     for field in ("measured_weight_grams", "kiosk_id", "image_path", "store_id", "retailer_id"):
         assert field not in metadata
     refund = Refund.query.one()
-    assert float(refund.measured_weight_grams) == 10 and refund.kiosk_code == "KIOSK-001"
+    assert float(refund.measured_weight_grams) == 200 and refund.kiosk_code == "KIOSK-001"
     assert refund.decision_status == "pending_review"
 
 
@@ -238,7 +238,7 @@ def test_session_and_local_store_hold_no_customer_data(client, app):
 
 def test_employee_flow_is_unchanged_after_agent_return(client, app):
     tx = _transaction(client)
-    refund_id = _submit(client, tx, _item(tx, "222222"), 999).get_json()["refund"]["refund_id"]
+    refund_id = _submit(client, tx, _item(tx, "222222"), 180).get_json()["refund"]["refund_id"]
     staff = login(client)
     [pending] = client.get("/api/refunds/pending", headers=staff).get_json()["refunds"]
     assert pending["refund_id"] == refund_id and pending["has_image"] is True

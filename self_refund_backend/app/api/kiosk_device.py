@@ -81,6 +81,7 @@ def kiosk_submit_return():
         barcode=data.get("barcode"),
         quantity=data.get("quantity", 1),
         idempotency_key=request.headers.get("Idempotency-Key", ""),
+        weight_rechecked=data.get("weight_rechecked") is True,
     )
 
     def read_scale():

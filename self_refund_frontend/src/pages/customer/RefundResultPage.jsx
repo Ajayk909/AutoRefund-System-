@@ -53,7 +53,17 @@ function RefundResultPage() {
   }
 
   const approved = result.decision_status === "approved";
-  const accent = approved ? "#10fbc4" : "#fbbf24";
+  // "rejected" here means the kiosk declined the return itself (e.g. weight far off).
+  const declined = result.decision_status === "rejected";
+  const view = approved
+    ? { accent: "#10fbc4", icon: "✓", eyebrow: "🎉 Refund Approved!", title: "You're all set!", status: "✓ Approved", verification: "Auto-approved",
+        subtitle: "Your return has been approved. Your refund will be issued to your original payment method." }
+    : declined
+    ? { accent: "#f87171", icon: "✕", eyebrow: "Return not accepted", title: "Please visit customer service", status: "✕ Declined", verification: "Declined at kiosk",
+        subtitle: result.decision_reason }
+    : { accent: "#fbbf24", icon: "⏳", eyebrow: "⏳ Under Review", title: "Almost there", status: "⏳ Pending review", verification: "Manual review",
+        subtitle: "Your return has been submitted and is waiting for a quick employee review." };
+  const accent = view.accent;
 
   const resetAndGoHome = () => {
     localStorage.removeItem("transactionData");
@@ -84,20 +94,20 @@ function RefundResultPage() {
           <div className={`rr2-hero ${approved ? "rr2-hero-approved" : "rr2-hero-pending"}`}>
             <div className="rr2-hero-glow" style={{ background: `radial-gradient(circle, ${accent}1a, transparent 70%)` }} />
             <div className="rr2-icon-ring" style={{ borderColor: `${accent}40`, boxShadow: `0 0 70px ${accent}28` }}>
-              <span className="rr2-icon" style={{ color: accent }}>{approved ? "✓" : "⏳"}</span>
+              <span className="rr2-icon" style={{ color: accent }}>{view.icon}</span>
             </div>
             <div className="rr2-hero-text">
-              <div className="rr2-hero-eyebrow" style={{ color: accent }}>{approved ? "🎉 Refund Approved!" : "⏳ Under Review"}</div>
-              <h1 className="rr2-hero-title">{approved ? "You're all set!" : "Almost there"}</h1>
+              <div className="rr2-hero-eyebrow" style={{ color: accent }}>{view.eyebrow}</div>
+              <h1 className="rr2-hero-title">{view.title}</h1>
               <p className="rr2-hero-subtitle">
-                {approved ? "Your return has been approved. Your refund will be issued to your original payment method." : "Your return has been submitted and is waiting for a quick employee review."}
+                {view.subtitle}
               </p>
             </div>
             <div className="rr2-amount-card" style={{ borderColor: `${accent}30`, background: `${accent}09` }}>
               <div className="rr2-amount-label">Refund Amount</div>
               <div className="rr2-amount-val" style={{ color: accent }}>${result.refund_amount}</div>
               <div className="rr2-amount-status" style={{ background: `${accent}14`, color: accent, borderColor: `${accent}28` }}>
-                {approved ? "✓ Approved" : "⏳ Pending review"}
+                {view.status}
               </div>
             </div>
           </div>
@@ -107,7 +117,7 @@ function RefundResultPage() {
             {[
               { label: "Expected Weight", val: `${result.expected_weight_grams} g` },
               { label: "Measured Weight", val: `${result.measured_weight_grams} g` },
-              { label: "Verification", val: approved ? "Auto-approved" : "Manual review", color: approved ? "#10fbc4" : "#fbbf24" },
+              { label: "Verification", val: view.verification, color: accent },
               { label: "Decision Reason", val: result.decision_reason },
             ].map((d, i) => (
               <div key={i} className="rr2-detail-card">

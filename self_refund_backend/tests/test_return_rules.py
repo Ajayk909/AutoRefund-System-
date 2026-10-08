@@ -26,10 +26,10 @@ def test_receipt_response_has_no_customer_details(client):
 
 def test_client_supplied_weight_is_ignored(client):
     tx = _transaction(client)
-    # scale says 10 g; the request claims a perfect 250 g
-    r = _submit(client, tx, _item(tx, "111111"), 10, measured_weight_grams=250)
+    # scale says 200 g; the request claims a perfect 250 g
+    r = _submit(client, tx, _item(tx, "111111"), 200, measured_weight_grams=250)
     body = r.get_json()["refund"]
-    assert body["measured_weight_grams"] == 10.0
+    assert body["measured_weight_grams"] == 200.0
     assert body["decision_status"] == "pending_review"
 
 
@@ -102,7 +102,7 @@ def test_invalid_quantity(client):
 def test_pending_review_blocks_resubmission(client):
     tx = _transaction(client)
     item = _item(tx, "222222")
-    _submit(client, tx, item, 999)
+    _submit(client, tx, item, 180)
     r = _submit(client, tx, item, 150)
     assert r.status_code == 400 and r.get_json()["existing_refund_status"] == "pending_review"
     assert "waiting for an employee" in r.get_json()["message"]
@@ -113,11 +113,11 @@ def test_rejected_return_can_be_retried_within_limit(client, app):
     tx = _transaction(client)
     item = _item(tx, "222222")
 
-    first = _submit(client, tx, item, 999).get_json()["refund"]["refund_id"]
+    first = _submit(client, tx, item, 180).get_json()["refund"]["refund_id"]
     client.post(f"/api/refunds/{first}/reject", headers=h, json={"reason": "wrong item"})
     assert _item(_transaction(client), "222222")["is_refundable"] is True
 
-    second = _submit(client, tx, item, 999)  # retry allowed (limit 1)
+    second = _submit(client, tx, item, 180)  # retry allowed (limit 1)
     assert second.status_code == 201
     client.post(f"/api/refunds/{second.get_json()['refund']['refund_id']}/reject", headers=h)
 
@@ -133,7 +133,7 @@ def test_no_retry_when_policy_disallows(client, app):
     h = login(client)
     tx = _transaction(client)
     item = _item(tx, "222222")
-    rid = _submit(client, tx, item, 999).get_json()["refund"]["refund_id"]
+    rid = _submit(client, tx, item, 180).get_json()["refund"]["refund_id"]
     client.post(f"/api/refunds/{rid}/reject", headers=h)
     assert _submit(client, tx, item, 150).get_json()["code"] == "TOO_MANY_ATTEMPTS"
 

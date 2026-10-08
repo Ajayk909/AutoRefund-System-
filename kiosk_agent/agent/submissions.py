@@ -27,8 +27,10 @@ from hardware import HardwareError, get_camera, get_scale
 
 log = logging.getLogger("autorefund.agent.submissions")
 
-# The only things the browser may choose: which receipt line and how many.
-ALLOWED_FIELDS = ("receipt_number", "transaction_id", "item_id", "product_id", "barcode", "quantity")
+# The only things the browser may choose: which receipt line, how many, and
+# whether the customer already placed the item again after a far-off weight.
+ALLOWED_FIELDS = ("receipt_number", "transaction_id", "item_id", "product_id", "barcode", "quantity",
+                  "weight_rechecked")
 IGNORED_FIELDS = ("measured_weight_grams", "kiosk_id", "image_path", "store_id", "retailer_id")
 
 

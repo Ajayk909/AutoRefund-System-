@@ -46,6 +46,10 @@ class ReturnRequest:
     quantity: object = 1
     capture_id: str = None
     idempotency_key: str = ""
+    # True when the customer already placed the item again after a far-off
+    # weight. Safe to take from the browser: it can only make a decline come
+    # sooner, never approve anything.
+    weight_rechecked: bool = False
 
 
 @dataclass
@@ -126,14 +130,24 @@ def submit_return(req, *, kiosk, policy, read_scale, obtain_photo, discard_photo
                           measured_weight_grams=float(measured) if valid else None,
                           stable=bool(reading.stable))
 
+    weight = rules.weight_check(product, quantity, measured, policy.weight_decline_percent)
+    if weight["far_off"] and not req.weight_rechecked:
+        # One more try first: the item may just be lying badly on the scale.
+        # Nothing is stored and no photo is taken for this attempt.
+        raise ReturnError("WEIGHT_CHECK_AGAIN",
+                          "Please take the item off the scale and place it again.", 409)
+
     photo = obtain_photo()
     try:
-        # Done here, before _create() locks the receipt line: a slow AI must
-        # not keep that database lock held while it thinks.
-        answer = _check_photo(photo, product, image_verifier, verifier_timeout_seconds)
-        ai = rules.ai_signal(answer, image_verifier)
+        if weight["far_off"]:
+            ai = None  # declined on weight alone, so don't pay for an AI check
+        else:
+            # Done here, before _create() locks the receipt line: a slow AI
+            # must not keep that database lock held while it thinks.
+            answer = _check_photo(photo, product, image_verifier, verifier_timeout_seconds)
+            ai = rules.ai_signal(answer, image_verifier)
         result = _create(req, kiosk, policy, transaction, product, line, quantity, key,
-                         reading, measured, photo, camera_mock, ai)
+                         reading, measured, weight, photo, camera_mock, ai)
     except Exception:
         if photo:
             discard_photo(photo)
@@ -156,7 +170,7 @@ def _check_photo(photo: Photo | None, product, verifier: ImageVerifier,
 
 
 def _create(req, kiosk, policy, transaction, product, line, quantity, key, reading, measured,
-            photo, camera_mock, ai):
+            weight, photo, camera_mock, ai):
     image_path = photo.relative_path if photo else None
 
     # --- lock the receipt line and apply the rules ---------------------------
@@ -170,7 +184,6 @@ def _create(req, kiosk, policy, transaction, product, line, quantity, key, readi
 
     rejected = _check_line_available(transaction, line, product, quantity, kiosk, policy)
 
-    weight = rules.weight_check(product, quantity, measured)
     signals = _collect_signals(req, weight, image_path is not None, ai)
     decision_status, decision_reason = rules.decide(signals, policy)
 
@@ -232,8 +245,10 @@ def _create(req, kiosk, policy, transaction, product, line, quantity, key, readi
 
 
 def _collect_signals(req: ReturnRequest, weight: dict, photo_captured: bool,
-                     ai: Signal) -> list[Signal]:
-    signals = [rules.weight_signal(weight), rules.photo_signal(photo_captured), ai]
+                     ai: Signal | None) -> list[Signal]:
+    signals = [rules.weight_signal(weight), rules.photo_signal(photo_captured)]
+    if ai:  # None when the AI check was skipped
+        signals.append(ai)
     barcode = rules.barcode_signal(req.barcode)
     if barcode:
         signals.append(barcode)

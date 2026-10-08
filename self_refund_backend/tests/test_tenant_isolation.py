@@ -111,7 +111,7 @@ def test_return_records_kiosk_store_and_retailer(client, app, tenants):
 def _other_pending_refund(client, app):
     _use_kiosk(app, "KIOSK-OTHER-1")
     _, tx = _receipt(client)
-    body = _return(client, app, tx, tx["items"][0], 5).get_json()["refund"]
+    body = _return(client, app, tx, tx["items"][0], 320).get_json()["refund"]
     assert body["decision_status"] == "pending_review"
     _use_kiosk(app, "KIOSK-001")
     return body["refund_id"]
@@ -145,9 +145,9 @@ def test_staff_cannot_see_or_act_on_other_retailers_returns(client, app, tenants
 
 def test_store_limited_staff_only_see_their_store(client, app, tenants):
     _, tx = _receipt(client)
-    store1_id = _return(client, app, tx, _item(tx, "222222"), 999).get_json()["refund"]["refund_id"]
+    store1_id = _return(client, app, tx, _item(tx, "222222"), 180).get_json()["refund"]["refund_id"]
     _use_kiosk(app, "KIOSK-002")
-    store2_id = _return(client, app, tx, _item(tx, "111111"), 1).get_json()["refund"]["refund_id"]
+    store2_id = _return(client, app, tx, _item(tx, "111111"), 200).get_json()["refund"]["refund_id"]
 
     clerk = login(client, "store2_clerk", "clerk123")
     pending = {p["refund_id"] for p in
@@ -166,7 +166,7 @@ def test_store_limited_staff_only_see_their_store(client, app, tenants):
 
 def test_staff_audit_events_carry_tenant(client, app, tenants):
     _, tx = _receipt(client)
-    refund_id = _return(client, app, tx, _item(tx, "222222"), 999).get_json()["refund"]["refund_id"]
+    refund_id = _return(client, app, tx, _item(tx, "222222"), 180).get_json()["refund"]["refund_id"]
     admin = login(client)
     client.post(f"/api/refunds/{refund_id}/reject", headers=admin, json={"reason": "x"})
     event = AuditLog.query.filter_by(event_type="refund_rejected_by_staff").one()

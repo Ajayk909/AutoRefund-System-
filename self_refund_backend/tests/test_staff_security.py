@@ -13,7 +13,7 @@ def _pending_refund(client):
     """Create a refund that goes to review (weight far outside tolerance)."""
     from tests.test_workflows import _item, _submit, _transaction
     tx = _transaction(client)
-    r = _submit(client, tx, _item(tx, "222222"), 999)
+    r = _submit(client, tx, _item(tx, "222222"), 180)
     assert r.status_code == 201, r.get_json()
     refund = r.get_json()["refund"]
     assert refund["decision_status"] == "pending_review"
