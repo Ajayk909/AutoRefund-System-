@@ -56,8 +56,10 @@ class Config:
     SCALE_MODE = os.getenv("SCALE_MODE", HARDWARE_MODE).strip().lower()
     CAMERA_INDEX = os.getenv("CAMERA_INDEX", "").strip()
     CAMERA_BACKEND = os.getenv("CAMERA_BACKEND", "auto").strip().lower()
-    CAMERA_WIDTH = _int("CAMERA_WIDTH", 640)
-    CAMERA_HEIGHT = _int("CAMERA_HEIGHT", 480)
+    # 1920x1080: sharp enough for the AI photo check (it scales bigger photos
+    # down anyway), ~0.2 s per frame. See docs/ai-evaluation.md.
+    CAMERA_WIDTH = _int("CAMERA_WIDTH", 1920)
+    CAMERA_HEIGHT = _int("CAMERA_HEIGHT", 1080)
     SCALE_VENDOR_ID = _int("SCALE_VENDOR_ID", 0x0922)
     SCALE_PRODUCT_ID = _int("SCALE_PRODUCT_ID", 0x8003)
     SCALE_READ_TIMEOUT_MS = _int("SCALE_READ_TIMEOUT_MS", 2000)
