@@ -76,8 +76,8 @@ module "ecs_service" {
   # `aws bedrock get-inference-profile --inference-profile-identifier <id>`).
   # The container setting and the IAM permission both follow from them.
   enable_ai_photo_check = true
-  bedrock_model_id      = "ca.amazon.nova-lite-v1:0"
-  bedrock_model_regions = ["ca-central-1", "ca-west-1"]
+  bedrock_model_id      = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  bedrock_model_regions = ["ca-central-1", "us-east-1", "us-east-2", "us-west-2"]
 }
 
 module "github_oidc" {

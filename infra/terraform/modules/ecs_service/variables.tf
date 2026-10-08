@@ -103,7 +103,7 @@ variable "device_auth_mode" {
 variable "enable_ai_photo_check" {
   type        = bool
   default     = false
-  description = "true = IMAGE_VERIFIER=bedrock: the Core API asks Amazon Bedrock to check item photos, and the task role may call the model below (and nothing else). Nova Lite: about $0.0003 per return."
+  description = "true = IMAGE_VERIFIER=bedrock: the Core API asks Amazon Bedrock to check item photos, and the task role may call the model below (and nothing else). About $0.0003 per return with Nova Lite, $0.0045 with Claude Haiku 4.5 (docs/ai-evaluation.md)."
 }
 
 variable "bedrock_model_id" {

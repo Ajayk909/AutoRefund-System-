@@ -84,7 +84,8 @@ All 12 calls together cost less than half a US cent.
 
 ## Decision for now
 
-- **Default model:** stays `ca.amazon.nova-lite-v1:0` with prompt v3: best
+- **Default model:** was `ca.amazon.nova-lite-v1:0` with prompt v3 until
+  2026-10-08 (see the decision at the end of this page): best
   result, cheapest, and the photos stay in Canada.
 - **Default setting:** `IMAGE_VERIFIER` stays `none` locally (`.env.example`);
   in dev it is switched on (`bedrock`) through Terraform.
@@ -196,9 +197,10 @@ upgrade to the Paid plan and the Anthropic use-case form, a read-only check
 `AVAILABLE` and the model `AUTHORIZED`.
 
 Note for the comparison: Claude Haiku 4.5 on Bedrock is only available
-through the `us.` or `global.` inference profiles, so **the photos are
-processed in the US** (this run used `us.`, called from us-east-1). Nova
-Lite's `ca.` profile keeps them in Canada.
+through the `us.` or `global.` inference profiles, so **the photos may be
+processed in the US**. Called from ca-central-1 (like the app), the `us.`
+profile can run a request in ca-central-1, us-east-1, us-east-2 or
+us-west-2; AWS picks. Nova Lite's `ca.` profile keeps them in Canada.
 
 ## Experiment: a product note for the missing pump (2026-10-08)
 
@@ -235,3 +237,17 @@ automatically. The weight check only catches it if the pump weighs more
 than the weight tolerance (10%, about 42 g for this 416 g product). A product note does not help with these models, so we
 do not add per-product notes for now. Staff can still see the kiosk photo of
 every return.
+
+## Decision (2026-10-08): Claude Haiku 4.5
+
+- **Default model in dev:** `us.anthropic.claude-haiku-4-5-20251001-v1:0`
+  with prompt v3. The cost (about $0.0045 per return) is acceptable for us.
+- **Region:** the app keeps calling Bedrock in ca-central-1. A test run from
+  ca-central-1 gave the same answers as from us-east-1 (1.5–2.1 s per check).
+  Photos may be processed in Canada or the US (see above).
+- **To switch model:** change only `bedrock_model_id` and
+  `bedrock_model_regions` in `infra/terraform/environments/dev/main.tf`
+  (`aws bedrock get-inference-profile` lists the regions).
+- **Locally:** `IMAGE_VERIFIER` stays `none` by default; set
+  `BEDROCK_MODEL_ID` in your own `.env` to try a model.
+- **Known limit:** the missing pump (see the experiment above).
