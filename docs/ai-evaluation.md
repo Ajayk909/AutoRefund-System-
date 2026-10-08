@@ -199,3 +199,39 @@ Note for the comparison: Claude Haiku 4.5 on Bedrock is only available
 through the `us.` or `global.` inference profiles, so **the photos are
 processed in the US** (this run used `us.`, called from us-east-1). Nova
 Lite's `ca.` profile keeps them in Canada.
+
+## Experiment: a product note for the missing pump (2026-10-08)
+
+Idea: give the AI product-specific knowledge. For the CeraVe tests only, one
+extra line was added to prompt v3 (a throwaway script, not in the app).
+
+- **Note 1:** "Required parts for this product: the white pump dispenser on
+  top of the bottle. If it is not clearly visible in the kiosk photo,
+  missing_part must be true."
+- **Note 2 (sharper):** "Required parts for this product: the pump. A pump
+  has a tall head with a nozzle sticking out sideways. If the top of the
+  bottle is only a short white screw collar, with no tall head and no
+  nozzle, the pump is missing and missing_part must be true."
+
+`cerave_nopump_close.jpg` is a second no-pump photo (closer, better light),
+so the note is not tuned to one photo. "With pump" is the reference photo
+itself used as the kiosk photo.
+
+| Kiosk photo | Should be | Nova Lite + note 1 | Haiku 4.5 + note 1 | Haiku 4.5 + note 2 |
+|---|---|---|---|---|
+| `cerave_nopump.jpg` | review | ❌ match (high) | ❌ match (high) | ❌ match (high) |
+| `cerave_nopump_close.jpg` | review | not run | not run | ❌ match (high) |
+| `MAIN/Cerave.jpg` (with pump) | match | ✅ match (high) | ✅ match (high) | ✅ match (high) |
+
+Both models answer "pump intact" / "same pump present". Where the pump
+should be, the bottle has a short white screw collar, and the models take
+it for the pump even when the note describes exactly that case.
+
+### Known limit
+
+**A missing pump (a small part on top of the right product) is not
+detected.** With a matching weight, such a return is approved
+automatically. The weight check only catches it if the pump weighs more
+than the weight tolerance (10%, about 42 g for this 416 g product). A product note does not help with these models, so we
+do not add per-product notes for now. Staff can still see the kiosk photo of
+every return.
