@@ -301,11 +301,18 @@ Last pump idea, Claude Haiku 4.5, one call per step (throwaway script).
 |---|---|---|---|
 | `cerave_nopump.jpg` | pump missing | ✅ "simple white screw-on cap... the pump dispenser appears to be missing" | ✅ mismatch (pump missing) |
 | `cerave_nopump_close.jpg` | pump missing | ❌ sees a "white pump dispenser"; says a "protective pump cap" is missing (no such part) | ⚠️ mismatch, for the wrong reason (the made-up cap) |
-| `MAIN/Cerave.jpg` (with pump) | nothing missing | ❌ sees the pump, then says the made-up cap is missing | ❌ mismatch (medium): a complete item goes to review |
+| `MAIN/Cerave.jpg` (see the correction) | pump missing | ❌ sees a pump, then says the made-up cap is missing | ⚠️ mismatch (medium), for the wrong reason (the made-up cap) |
+
+**Correction:** shortly before this run, `MAIN/Cerave.jpg` had been
+replaced by a photo of the bottle **without** its pump. So all three kiosk
+photos had no pump, and step 2 compared them with a no-pump reference. This
+run had no photo with the pump, so it shows nothing about false alarms on a
+complete item.
 
 The two steps take 5.1–6.0 s together (more than the 5-second timeout) and
-cost about $0.008 per check. Asking "is anything missing?" makes the model
-name a missing part even on a complete item.
+cost about $0.008 per check. Step 1 spotted the missing pump on only 1 of
+the 3 no-pump photos; on the other two it saw a pump and named a missing
+part that does not exist.
 
 **Result:** the pump experiments stop here. The missing pump is a known
 limit (see above).
