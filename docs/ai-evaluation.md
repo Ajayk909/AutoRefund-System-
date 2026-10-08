@@ -124,22 +124,43 @@ Bedrock calls.
 "Kiosk should" assumes the weight matched, so it shows what the AI alone
 decides.
 
-| Test | Kiosk should | Nova Lite + v3 | AI's `kiosk_item` |
+| Test | Kiosk should | Nova Lite + v3 | Claude Haiku 4.5 + v3 |
 |---|---|---|---|
-| 1 Somersby OK | approve | ✅ approve (match, high) | a can of cider |
-| 2 CeraVe, no pump | review | ❌ approve (match, high) | CeraVe Acne Control Cleanser |
-| 3 One shoe in box | review ¹ | ✅ review (missing part, high) | NavyWhite Sneakers (in New Balance box) ² |
-| 4 CeraVe vs Somersby reference | decline | ✅ decline (different product, high) | bottle of CeraVe Acne Control Cleanser |
-| **Correct** | | **3 / 4** | |
+| 1 Somersby OK ³ | approve | ✅ approve (match, high) | ❌ review (damage: "the can has been opened", high) |
+| 2 CeraVe, no pump | review | ❌ approve (match, high) | ❌ approve (match, high: "pump cap intact") |
+| 3 One shoe in box | review ¹ | ✅ review (missing part, high) | ✅ review (missing part, high) |
+| 4 CeraVe vs Somersby reference | decline | ✅ decline (different product, high) | ✅ decline (different product, high) |
+| **Correct** | | **3 / 4** | **2 / 4** |
+
+What each model said the kiosk photo shows (`kiosk_item`):
+
+| Test | Nova Lite + v3 | Claude Haiku 4.5 + v3 |
+|---|---|---|
+| 1 | a can of cider | a can of Somersby Blackberry Cider |
+| 2 | CeraVe Acne Control Cleanser | CeraVe Acne Control Cleanser bottle |
+| 3 | NavyWhite Sneakers (in New Balance box) ² | Navy/White sneakers in New Balance box |
+| 4 | bottle of CeraVe Acne Control Cleanser | CeraVe Acne Control Cleanser bottle |
 
 ¹ With the real one-shoe box the weight is about 75% too low, so the kiosk
 declines it on weight before the AI is asked.
 ² This run removed the "/" from the phrase; the code keeps it since
-commit `5750c6c`.
+commit `5750c6c` (the Haiku run was after that fix).
+³ The "OK" kiosk photo actually shows an **opened** can (the drink opening
+in the lid is visible); the reference photo shows the can from the side, so
+its lid can't be seen. Haiku reported the opening as damage, Nova Lite did
+not notice it. Whether an opened can should be refused is a store policy
+question, so this row is still scored against the original label.
 
-| Run | Model ID | Region | Time per check | Input tokens | Output tokens | Cost per check |
+| Run | Model ID | Called from | Time per check | Input tokens | Output tokens | Cost per check |
 |---|---|---|---|---|---|---|
 | Nova Lite + v3 | `ca.amazon.nova-lite-v1:0` | ca-central-1 | 1.1–1.6 s | ~4,473 | 67–106 | ~$0.00029 |
+| Claude Haiku 4.5 + v3 | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | us-east-1 | 1.5–2.5 s | ~3,410 | 113–141 | ~$0.0045 ⁴ |
+
+⁴ Estimated with $1.10 per 1M input and $5.50 per 1M output tokens: the
+global price ($1 / $5) plus the ~10% AWS charges for geographic (`us.`)
+cross-Region profiles. Check the Amazon Bedrock pricing page before relying
+on it. That is about 15x the Nova Lite cost; the 4 Haiku calls together
+cost about $0.02.
 
 ### What we learned (v3)
 
@@ -155,12 +176,26 @@ commit `5750c6c`.
   product name from the prompt instead of describing the photo (tests 2 and
   3). It also leaves out "a" sometimes ("It looks like bottle of ...").
 
-### Claude Haiku 4.5: not run yet
+### What we learned (Claude Haiku 4.5)
 
-Blocked for now: the AWS account is on the Free plan, so the Bedrock
-Marketplace agreement for Anthropic models is not available, and the
-Anthropic use-case form is not filled in yet.
+- **The missing pump:** not caught either. Haiku said the "pump cap
+  intact", which is not what the photo shows.
+- **The opened can:** Haiku noticed it (test 1); Nova Lite did not.
+- **Item phrases:** more natural ("a can of Somersby Blackberry Cider"),
+  but it also repeats the product name from the prompt for the right product.
+- **Speed:** 1.5–2.5 s per check, within the 5-second timeout, but slower
+  than Nova Lite.
+- **Cost:** about 15x Nova Lite per check (still under half a cent).
+
+### Claude Haiku 4.5: access and region
+
+Until 2026-10-08 the AWS account was on the Free plan, so the Bedrock
+Marketplace agreement for Anthropic models was not available. After the
+upgrade to the Paid plan and the Anthropic use-case form, a read-only check
+(`aws bedrock get-foundation-model-availability`) showed the agreement
+`AVAILABLE` and the model `AUTHORIZED`.
 
 Note for the comparison: Claude Haiku 4.5 on Bedrock is only available
 through the `us.` or `global.` inference profiles, so **the photos are
-processed in the US**. Nova Lite's `ca.` profile keeps them in Canada.
+processed in the US** (this run used `us.`, called from us-east-1). Nova
+Lite's `ca.` profile keeps them in Canada.
