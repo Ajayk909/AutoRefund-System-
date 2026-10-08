@@ -1,12 +1,13 @@
 """
 Try the real AI photo check on our demo photos (results: docs/ai-evaluation.md).
 
-    python evaluate_ai.py <model-id> [photo-folder]
+    python evaluate_ai.py <model-id> [runs]
 
 Uses the app's own BedrockVerifier (same prompt, same 5-second limit), so
-this tests exactly what the kiosk does. The photo folder (default: the
-`camera` folder next to the repo) holds MAIN/ (reference photos) and test/
-(kiosk photos). Every run makes real, paid AWS calls: one per test.
+this tests exactly what the kiosk does. The photos are in the `camera`
+folder next to the repo: reference/ (reference photos) and test/ (kiosk
+photos). Every run makes real, paid AWS calls: one per test, and `runs`
+(default 1) repeats all tests to show how consistent the answers are.
 """
 import os
 import sys
@@ -21,12 +22,16 @@ SOMERSBY = "Somersby Blackberry Cider Can"
 CERAVE = "CeraVe Acne Control Cleanser"
 SHOES = "Navy/White Sneakers (in New Balance box)"
 
+PHOTOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "camera")
+
 # (kiosk photo, product on the receipt, its reference photo, what the kiosk should do)
 TESTS = [
-    ("somersby_ok.jpg", SOMERSBY, "Somersby.jpg", "approve"),
-    ("cerave_nopump.jpg", CERAVE, "Cerave.jpg", "review"),    # pump missing
-    ("nb_emptybox.jpg", SHOES, "NB.jpg", "review"),            # one shoe; weight declines first
-    ("cerave_nopump.jpg", SOMERSBY, "Somersby.jpg", "decline"),  # wrong product
+    ("somersby_ok.jpg", SOMERSBY, "somersby.jpg", "approve"),
+    ("cerave_ok.jpg", CERAVE, "cerave.jpg", "approve"),
+    ("cerave_nopump.jpg", CERAVE, "cerave.jpg", "review"),     # missing part
+    ("shoes_ok.jpg", SHOES, "shoes.jpg", "approve"),
+    ("shoes_one.jpg", SHOES, "shoes.jpg", "review"),           # missing part
+    ("wrong_item.jpg", SOMERSBY, "somersby.jpg", "decline"),   # a CeraVe bottle
 ]
 
 
@@ -61,14 +66,27 @@ def kiosk_outcome(answer):
     return "approve" if answer.result == MATCH else "review"
 
 
-def main(model_id, photo_folder):
-    verifier = BedrockVerifier(FolderStorage(os.path.join(photo_folder, "MAIN")), model_id,
+def main(model_id, runs):
+    # Stop before any paid call if a photo is missing.
+    missing = [path for photo, _, reference, _ in TESTS
+               for path in (os.path.join(PHOTOS, "test", photo),
+                            os.path.join(PHOTOS, "reference", reference))
+               if not os.path.exists(path)]
+    if missing:
+        sys.exit(f"Missing photos, no calls made: {missing}")
+
+    verifier = BedrockVerifier(FolderStorage(os.path.join(PHOTOS, "reference")), model_id,
                                region=os.getenv("AWS_REGION"), timeout_seconds=TIMEOUT_SECONDS)
     verifier.client = RecordingClient(verifier.client)
     print(f"Model {model_id}, region {verifier.client.client.meta.region_name}\n")
+    for run in range(1, runs + 1):
+        print(f"===== Run {run} of {runs} =====")
+        run_tests(verifier)
 
+
+def run_tests(verifier):
     for number, (photo, product, reference, expected) in enumerate(TESTS, start=1):
-        with open(os.path.join(photo_folder, "test", photo), "rb") as f:
+        with open(os.path.join(PHOTOS, "test", photo), "rb") as f:
             kiosk_photo = f.read()
         verifier.client.last = None
         start = time.perf_counter()
@@ -91,5 +109,4 @@ def main(model_id, photo_folder):
 if __name__ == "__main__":
     if len(sys.argv) not in (2, 3):
         sys.exit(__doc__)
-    default_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "camera")
-    main(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else default_folder)
+    main(sys.argv[1], int(sys.argv[2]) if len(sys.argv) == 3 else 1)
