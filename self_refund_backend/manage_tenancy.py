@@ -9,6 +9,7 @@ Manage retailers, stores and kiosks from the command line.
     python manage_tenancy.py issue-staging-key <KIOSK_CODE> [--secret-name <name>] [--days N]
     python manage_tenancy.py revoke-keys <KIOSK_CODE>
     python manage_tenancy.py reset-staff-password <USERNAME> [--secret-name <name>]
+    python manage_tenancy.py reset-demo-returns <RETAILER_CODE>
 
 issue-dev-key creates a DEVELOPMENT key for the kiosk agent (shown once, or
 written to the agent's .env as KIOSK_DEV_KEY). Development keys only work
@@ -31,6 +32,12 @@ autorefund/<ENVIRONMENT>/admin-password (the same name seed.py and Terraform
 use); pass --secret-name for a different staff member's secret. All of that
 staff member's existing sessions keep working until they expire or log out -
 this rotates the password, it does not force a re-login.
+
+reset-demo-returns deletes all returns of one retailer (with their
+verification signals and return audit entries), so every receipt line can
+be returned again. Products, reference photos, receipts, staff and kiosk
+keys stay. For demos and tests only: it refuses to run unless ENVIRONMENT
+is local or dev.
 """
 import secrets as secrets_lib
 import sys
@@ -38,9 +45,14 @@ import sys
 from werkzeug.security import generate_password_hash
 
 from app import create_app, db
-from app.models import Kiosk, Retailer, Staff, Store
+from app.models import AuditLog, Kiosk, Refund, Retailer, Staff, Store, VerificationSignal
 from app.tenancy import device_auth, repository, setup
 from cloud_secrets import store_secret
+from config import DEV, LOCAL
+
+# Audit events about a return that was blocked before it existed. They have
+# no refund_id, so reset-demo-returns finds them by type.
+BLOCKED_RETURN_EVENTS = ("duplicate_refund_blocked", "return_attempt_limit_reached")
 
 
 def main(argv):
@@ -125,6 +137,8 @@ def main(argv):
             print(f"Password for {staff.username} rotated and stored in Secrets Manager "
                  f"secret {secret_name!r} (value not printed).")
             return 0
+        elif command == "reset-demo-returns" and len(args) == 1:
+            return reset_demo_returns(app.config.get("ENVIRONMENT", LOCAL), args[0])
         elif command == "revoke-keys" and args:
             kiosk = repository.get_kiosk_by_code(args[0])
             if not kiosk:
@@ -140,6 +154,31 @@ def main(argv):
         db.session.commit()
         print("Done.")
         return 0
+
+
+def reset_demo_returns(environment, retailer_code):
+    if environment not in (LOCAL, DEV):
+        print("Refusing: reset-demo-returns only runs when ENVIRONMENT is local or dev "
+              f"(now: {environment}).")
+        return 1
+    retailer = repository.get_retailer_by_code(retailer_code)
+    if not retailer:
+        print(f"Retailer {retailer_code} not found")
+        return 1
+    retailer_id = retailer.retailer_id
+    refund_ids = [r.refund_id for r in Refund.query.filter_by(retailer_id=retailer_id)]
+    # Children before parents: signals and audit entries point at returns.
+    signals = VerificationSignal.query.filter_by(retailer_id=retailer_id).delete()
+    audit_entries = AuditLog.query.filter(db.or_(
+        AuditLog.refund_id.in_(refund_ids),
+        db.and_(AuditLog.retailer_id == retailer_id,
+                AuditLog.event_type.in_(BLOCKED_RETURN_EVENTS)),
+    )).delete(synchronize_session=False)
+    returns = Refund.query.filter_by(retailer_id=retailer_id).delete()
+    db.session.commit()
+    print(f"Deleted {returns} returns, {signals} verification signals and "
+          f"{audit_entries} audit entries for retailer {retailer.code}.")
+    return 0
 
 
 def write_env(path, values):
