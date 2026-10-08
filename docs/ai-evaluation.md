@@ -310,6 +310,58 @@ name a missing part even on a complete item.
 **Result:** the pump experiments stop here. The missing pump is a known
 limit (see above).
 
+## New photo set at 1920x1080, 3 runs each (2026-10-08)
+
+**Camera:** until now the kiosk agent captured at **640x480**
+(`CAMERA_WIDTH`/`CAMERA_HEIGHT` in `kiosk_agent/.env`). The webcam (Logitech
+C920) can do up to 2304x1536, but Claude scales big images down to about
+1.15 megapixels (a 1920x1080 photo costs ~1,600 input tokens), so
+**1920x1080** is enough: ~210 ms and ~210 KB per photo. The kiosk's
+`kiosk_agent/.env` is now set to 1920x1080 (a local, git-ignored file).
+
+**Photos:** all new, taken with the kiosk webcam at 1920x1080 with the same
+OpenCV settings as the agent (`camera/reference/` and `camera/test/`; the
+older photos are in `camera/old/`). Each test photo was taken after lifting
+the item and placing it again, so no test photo is a copy of its
+reference. `wrong_item.jpg` is the CeraVe bottle, checked against the
+Somersby reference.
+
+**Setups** (Claude Haiku 4.5, `us.` profile called from ca-central-1, each
+case run 3 times):
+
+- **A:** prompt v3, as in the app (`evaluate_ai.py <model-id> 3`).
+- **C:** A, plus for CeraVe only a separate closed question on the kiosk
+  photo alone: "Look at the top of the bottle. Is a pump head with a side
+  nozzle present? Answer pump_present: true/false." `false` would send the
+  return to review.
+- **B (Claude Sonnet):** not tested. No Sonnet model is enabled for this
+  account on Bedrock (Sonnet 5.5: AccessDenied, "contact AWS Sales").
+
+| Case | Should be | A: correct | C: correct |
+|---|---|---|---|
+| `somersby_ok.jpg` | approve | 3/3 | 3/3 (same as A) |
+| `cerave_ok.jpg` (with pump) | approve | 3/3 | 3/3 (pump_present true 3/3) |
+| `cerave_nopump.jpg` | review (missing part) | **0/3**: "all components intact... with pump" | **0/3**: pump_present **true** 3/3 |
+| `shoes_ok.jpg` | approve | 3/3 | 3/3 (same as A) |
+| `shoes_one.jpg` | review (missing part) | 3/3 | 3/3 (same as A) |
+| `wrong_item.jpg` | decline (different product) | 3/3 | 3/3 (same as A) |
+| **False alarms on the 3 OK photos** | | 0/9 | 0/9 |
+
+The answers were word for word the same in all 3 runs (temperature 0).
+
+| Setup | Time per check | Tokens in / out | Cost per check (est.) |
+|---|---|---|---|
+| A | 1.3–2.0 s | ~3,410 / 112–149 | ~$0.0045 |
+| C, extra pump question | +0.7–1.2 s | ~1,615 / 15 | +$0.0019 |
+
+All 24 calls together cost about $0.09.
+
+**Result:** sharper, larger photos do not change the pump result. Haiku
+handles the wrong product, the missing shoe and the correct items every
+time, but it reads the short white screw collar of the bottle as a pump,
+even when asked about the pump directly. The missing pump stays a known
+limit.
+
 ## Decision (2026-10-08): Claude Haiku 4.5
 
 - **Default model in dev:** `us.anthropic.claude-haiku-4-5-20251001-v1:0`
