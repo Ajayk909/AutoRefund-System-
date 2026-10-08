@@ -382,3 +382,12 @@ limit.
 - **Locally:** `IMAGE_VERIFIER` stays `none` by default; set
   `BEDROCK_MODEL_ID` in your own `.env` to try a model.
 - **Known limit:** the missing pump (see the experiment above).
+
+## Known issue: reference photos expire after 90 days
+
+The S3 lifecycle rule on the evidence bucket (`expire-evidence`,
+`infra/terraform/modules/evidence_s3/main.tf`) has an empty filter, so it
+deletes **every** object after 90 days, including the reference photos
+under `reference/`. After that the AI check has no reference and answers
+"uncertain", so every return goes to employee review. Fix later: limit the
+rule to the `evidence/` prefix. Terraform is unchanged for now.
