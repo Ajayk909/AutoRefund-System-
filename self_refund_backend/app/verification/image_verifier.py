@@ -5,6 +5,7 @@ The default is NoAIVerifier, which checks nothing. IMAGE_VERIFIER=bedrock
 switches on the real AI check (bedrock_verifier.py).
 """
 import logging
+import re
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ RESULTS = (MATCH, MISMATCH, UNCERTAIN)
 # Same length as verification_signals.reason, so a chatty verifier can't
 # make saving the return fail.
 MAX_REASON_LENGTH = 500
+# The AI's item phrase ("a can of cider") can be shown to the customer, so
+# it is kept short.
+MAX_ITEM_LENGTH = 60
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,11 @@ class VerificationResult:
     result: str               # match | mismatch | uncertain
     confidence: float | None  # 0.0 to 1.0; None when nothing was measured
     reason: str               # short, for staff
+    # What the AI says the kiosk photo shows ("a can of cider"), or None.
+    detected_item: str | None = None
+    # True only when the AI is sure the photo shows a different KIND of
+    # product. The one AI answer that may decline a return.
+    different_product: bool = False
 
 
 class ImageVerifier(ABC):
@@ -119,13 +128,31 @@ def _checked_answer(verifier: ImageVerifier, answer) -> VerificationResult:
         log.warning("Image verifier %r gave an invalid answer: %r", verifier.name, answer)
         return VerificationResult(UNCERTAIN, None, "Image check gave an invalid answer")
     reason = answer.reason.strip()[:MAX_REASON_LENGTH] or "No reason given"
-    return VerificationResult(answer.result, answer.confidence, reason)
+    return VerificationResult(answer.result, answer.confidence, reason,
+                              plain_item(answer.detected_item), answer.different_product)
+
+
+def plain_item(text) -> str | None:
+    """The AI's item phrase as short plain text, or None. The customer may
+    see it, so only letters, digits, spaces and simple punctuation are kept."""
+    if not isinstance(text, str):
+        return None
+    text = re.sub(r"[^\w\s',.&()-]", "", text)
+    text = " ".join(text.split()).strip(" .")
+    return text[:MAX_ITEM_LENGTH].strip() or None
 
 
 def _is_well_formed(answer) -> bool:
     if not isinstance(answer, VerificationResult):
         return False
     if answer.result not in RESULTS or not isinstance(answer.reason, str):
+        return False
+    if answer.detected_item is not None and not isinstance(answer.detected_item, str):
+        return False
+    if not isinstance(answer.different_product, bool):
+        return False
+    # A different product is always a mismatch; anything else is a mix-up.
+    if answer.different_product and answer.result != MISMATCH:
         return False
     if answer.confidence is None:
         return True

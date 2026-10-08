@@ -121,6 +121,9 @@ def test_verify_safely_does_not_wait_for_a_slow_verifier():
     VerificationResult(MATCH, True, "True is not a confidence"),
     VerificationResult(MATCH, "0.9", "confidence as text"),
     VerificationResult(MATCH, 0.9, None),
+    VerificationResult(MATCH, 0.9, "a match can't be a different product", None, True),
+    VerificationResult(MISMATCH, 0.9, "different_product must be True or False", None, "yes"),
+    VerificationResult(MISMATCH, 0.9, "item must be text", 42),
 ])
 def test_verify_safely_turns_a_nonsense_answer_into_uncertain(bad_answer):
     answer = verify_safely(RawAnswerVerifier(bad_answer), JPEG, COLA, timeout_seconds=1)
@@ -145,11 +148,12 @@ def _weight(match, far_off=False):
 
 
 def _real_ai(result, reason="AI says so"):
-    return rules.ai_signal(VerificationResult(result, 0.95, reason), FixedVerifier(result))
+    return rules.ai_signal(VerificationResult(result, 0.95, reason), FixedVerifier(result),
+                           "Coca Cola Can")
 
 
 def _no_ai():
-    return rules.ai_signal(NoAIVerifier().verify(JPEG, COLA), NoAIVerifier())
+    return rules.ai_signal(NoAIVerifier().verify(JPEG, COLA), NoAIVerifier(), "Coca Cola Can")
 
 
 def test_all_checks_match_approves():

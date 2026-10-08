@@ -145,7 +145,7 @@ def submit_return(req, *, kiosk, policy, read_scale, obtain_photo, discard_photo
             # Done here, before _create() locks the receipt line: a slow AI
             # must not keep that database lock held while it thinks.
             answer = _check_photo(photo, product, image_verifier, verifier_timeout_seconds)
-            ai = rules.ai_signal(answer, image_verifier)
+            ai = rules.ai_signal(answer, image_verifier, product.name)
         result = _create(req, kiosk, policy, transaction, product, line, quantity, key,
                          reading, measured, weight, photo, camera_mock, ai)
     except Exception:

@@ -53,9 +53,13 @@ class FakeStorage:
         return self.files.get(key)
 
 
-def _reply(same=True, damage=False, confidence="high", reason="Looks right", missing=False):
-    return json.dumps({"differences": "none", "same_product": same, "missing_part": missing,
-                       "obvious_damage": damage, "confidence": confidence, "reason": reason})
+def _reply(same=True, damage=False, confidence="high", reason="Looks right", missing=False,
+           item=None):
+    answer = {"differences": "none", "same_product": same, "missing_part": missing,
+              "obvious_damage": damage, "confidence": confidence, "reason": reason}
+    if item is not None:
+        answer["kiosk_item"] = item
+    return json.dumps(answer)
 
 
 def _verifier(client):
@@ -94,6 +98,30 @@ def test_unsure_answer_is_uncertain(same, damage, confidence):
     assert _check(_reply(same, damage, confidence)).result == UNCERTAIN
 
 
+@pytest.mark.parametrize("same, missing, damage, confidence, different", [
+    (False, False, False, "high", True),     # sure it's another kind of product
+    (False, False, False, "medium", False),  # not sure enough to decline
+    (True, True, False, "high", False),      # missing part: a person decides
+    (True, False, True, "high", False),      # damage: a person decides
+    (False, True, False, "high", False),     # mixed answer: a person decides
+])
+def test_only_a_sure_different_product_is_flagged(same, missing, damage, confidence, different):
+    answer = _check(_reply(same, damage, confidence, missing=missing, item="a bottle"))
+    assert answer.different_product is different
+
+
+def test_kiosk_item_is_kept_and_shown_to_staff():
+    answer = _check(_reply(same=False, reason="Not a can.", item="a bottle of face wash"))
+    assert answer.detected_item == "a bottle of face wash"
+    assert answer.reason == ("Not a can. Kiosk photo shows: a bottle of face wash. "
+                             "(AI confidence: high)")
+
+
+def test_missing_kiosk_item_is_fine():
+    answer = _check(_reply(same=False))
+    assert answer.different_product is True and answer.detected_item is None
+
+
 def test_json_wrapped_in_a_code_block_is_still_read():
     assert _check("```json\n" + _reply() + "\n```").result == MATCH
 
@@ -126,6 +154,7 @@ def test_sends_reference_photo_kiosk_photo_and_product_name():
     assert images == [{"format": "png", "source": {"bytes": REFERENCE}},
                       {"format": "jpeg", "source": {"bytes": KIOSK_PHOTO}}]
     assert "Somersby Blackberry Cider Can" in content[-1]["text"]
+    assert '"kiosk_item"' in content[-1]["text"]
 
 
 @pytest.mark.parametrize("keys", [(), ("reference/deleted.jpg",)])
@@ -172,7 +201,8 @@ def test_build_verifier_creates_the_bedrock_verifier():
 def test_ai_mismatch_on_a_real_return_goes_to_review(client, app, staff_headers):
     cola = _product("Coca Cola Can")
     assert _upload(client, staff_headers, cola.product_id, REFERENCE, "ref.png").status_code == 201
-    fake = FakeBedrockClient(_reply(same=False, reason="Photo shows chips, not a can"))
+    fake = FakeBedrockClient(_reply(same=False, confidence="medium",
+                                    reason="Photo shows chips, not a can"))
     app.image_verifier = BedrockVerifier(app.evidence_storage, MODEL, client=fake)
 
     tx = _transaction(client)
@@ -187,4 +217,4 @@ def test_ai_mismatch_on_a_real_return_goes_to_review(client, app, staff_headers)
     ai = VerificationSignal.query.filter_by(refund_id=uuid.UUID(refund["refund_id"]),
                                             signal_type="ai").one()
     assert (ai.result, ai.source) == (MISMATCH, "bedrock:ca.amazon.nova-lite-v1:0")
-    assert ai.reason == "Photo shows chips, not a can (AI confidence: high)"
+    assert ai.reason == "Photo shows chips, not a can (AI confidence: medium)"

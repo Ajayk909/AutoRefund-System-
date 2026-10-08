@@ -95,6 +95,7 @@ AI_REVIEW_REASON = "We need an employee to review this return"
 # Polite on purpose: a declined customer is sent to a person, never accused.
 WEIGHT_DECLINE_MESSAGE = ("This item doesn't match your receipt. "
                           "Please visit the customer service desk.")
+DESK_MESSAGE = "This return can't be completed here. Please visit the customer service desk."
 
 
 @dataclass(frozen=True)
@@ -139,9 +140,20 @@ def photo_signal(photo_captured: bool) -> Signal:
     return Signal(PHOTO, UNCERTAIN, "No item photo could be captured", "kiosk-camera")
 
 
-def ai_signal(answer: VerificationResult, verifier: ImageVerifier) -> Signal:
+def ai_signal(answer: VerificationResult, verifier: ImageVerifier, product_name: str) -> Signal:
+    decline = None
+    if answer.different_product:
+        decline = different_product_message(product_name, answer.detected_item)
     return Signal(AI, answer.result, answer.reason, verifier.name,
-                  confidence=answer.confidence, is_real_check=verifier.is_real_check)
+                  confidence=answer.confidence, is_real_check=verifier.is_real_check,
+                  decline_message=decline)
+
+
+def different_product_message(product_name: str, item: str | None) -> str:
+    """What the customer sees when the AI is sure the item is a different product."""
+    if not item:
+        return f"This doesn't look like the item on your receipt. {DESK_MESSAGE}"
+    return f"This doesn't look like {product_name}. It looks like {item}. {DESK_MESSAGE}"
 
 
 # --- Decision ----------------------------------------------------------------

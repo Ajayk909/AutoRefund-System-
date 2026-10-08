@@ -13,7 +13,7 @@ import json
 import logging
 
 from app.verification.image_verifier import (MATCH, MISMATCH, UNCERTAIN, ExpectedProduct,
-                                             ImageVerifier, VerificationResult)
+                                             ImageVerifier, VerificationResult, plain_item)
 
 log = logging.getLogger("autorefund.verification")
 
@@ -22,16 +22,19 @@ MAX_REFERENCE_IMAGES = 3
 IMAGE_FORMATS = {"image/jpeg": "jpeg", "image/png": "png"}
 CONFIDENCES = ("high", "medium", "low")
 
-# "differences" comes first on purpose: the model has to compare the photos
-# before it gives its true/false answers.
+# Prompt v3. "kiosk_item" and "differences" come first on purpose: the model
+# has to look at the kiosk photo and compare before its true/false answers.
+# same_product means the KIND of product: a missing part or damage is a
+# separate answer, so it can never make the kiosk decline a return.
 QUESTION = """You check returned items at a self-service return kiosk.
 The reference photo(s) show the correct product, complete and undamaged: "{name}".
 Compare the kiosk photo with the reference photo(s) carefully: the product,
 the number of items, and every part (for example a pump, cap or lid, or one
 item of a pair).
 Reply ONLY with JSON, no other text, with the fields in this order:
-{{"differences": "every visible difference, or none",
-"same_product": true or false,
+{{"kiosk_item": "what the item in the kiosk photo is, in a few words, for example: a can of cider",
+"differences": "every visible difference, or none",
+"same_product": true or false (false only if the kiosk photo shows a different kind of product; a missing part or damage does NOT make it a different product),
 "missing_part": true or false (a part or item in the reference photo is not in the kiosk photo),
 "obvious_damage": true or false,
 "confidence": "high" or "medium" or "low",
@@ -106,16 +109,24 @@ def answer_to_result(text: str) -> VerificationResult:
         return VerificationResult(UNCERTAIN, None, "AI answer could not be read")
 
     confidence = answer["confidence"]
-    problem = (not answer["same_product"] or answer["missing_part"]
-               or answer["obvious_damage"])
+    part_or_damage = answer["missing_part"] or answer["obvious_damage"]
+    problem = not answer["same_product"] or part_or_damage
+    # Only a sure "different kind of product" may decline. If the model also
+    # sees a missing part or damage, its answer is mixed, so a person decides.
+    different = not answer["same_product"] and not part_or_damage and confidence == "high"
+    item = plain_item(answer.get("kiosk_item"))  # optional: None if missing
+
+    reason = answer["reason"].strip()
+    if item:
+        reason += f" Kiosk photo shows: {item}."
     # The model only says high/medium/low, so we keep that word for staff
     # instead of inventing a percentage.
-    reason = f"{answer['reason'].strip()} (AI confidence: {confidence})"
+    reason += f" (AI confidence: {confidence})"
     if not problem and confidence == "high":
-        return VerificationResult(MATCH, None, reason)
+        return VerificationResult(MATCH, None, reason, item)
     if problem and confidence in ("high", "medium"):
-        return VerificationResult(MISMATCH, None, reason)
-    return VerificationResult(UNCERTAIN, None, reason)
+        return VerificationResult(MISMATCH, None, reason, item, different)
+    return VerificationResult(UNCERTAIN, None, reason, item)
 
 
 def _parse_answer(text):

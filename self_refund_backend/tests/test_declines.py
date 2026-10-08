@@ -5,16 +5,24 @@ A weight far away from the expected weight (more than WEIGHT_DECLINE_PERCENT)
 can't be the right item. The customer is asked once to place the item again;
 if it is still far off, the return is declined (status rejected, no staff
 member) without paying for an AI check.
+
+The AI may decline too, but only when the weight matched and it is sure the
+photo shows a different kind of product. Anything subtler goes to review.
 """
 import glob
 import os
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from app.models import Refund
 from app.returns import rules
 from app.returns.states import PENDING_REVIEW, REJECTED
-from app.verification.image_verifier import MATCH, MISMATCH
+from app.verification.bedrock_verifier import BedrockVerifier
+from app.verification.image_verifier import MATCH, MISMATCH, plain_item
+from tests.test_bedrock_verifier import MODEL, REFERENCE, FakeBedrockClient, _reply
+from tests.test_reference_images import _product, _upload
 from tests.test_verification import PHOTO_REQUIRED, FixedVerifier, _real_ai, _signals_of
 from tests.test_workflows import _item, _submit, _transaction
 
@@ -102,3 +110,56 @@ def test_a_kiosk_decline_counts_as_an_attempt(client):
     assert _submit(client, tx, item, 10, weight_rechecked=True).status_code == 201  # retry limit 1
     r = _submit(client, tx, item, 150)
     assert r.status_code == 400 and r.get_json()["code"] == "TOO_MANY_ATTEMPTS"
+
+
+# --- the AI's item phrase in the customer message ---------------------------------
+def test_customer_message_uses_the_ai_item_phrase():
+    assert rules.different_product_message("Coca Cola Can", "a bottle of face wash") == (
+        "This doesn't look like Coca Cola Can. It looks like a bottle of face wash. "
+        "This return can't be completed here. Please visit the customer service desk.")
+
+
+def test_customer_message_without_an_item_phrase():
+    assert rules.different_product_message("Coca Cola Can", None).startswith(
+        "This doesn't look like the item on your receipt. ")
+
+
+@pytest.mark.parametrize("raw, clean", [
+    ("a bottle of face wash.", "a bottle of face wash"),
+    ("<b>a *shiny*\n can</b>", "ba shiny canb"),  # no markup or line breaks
+    ("x" * 100, "x" * 60),
+    ("  ", None),
+    (None, None),
+    (42, None),
+])
+def test_item_phrase_is_short_plain_text(raw, clean):
+    assert plain_item(raw) == clean
+
+
+# --- real returns with the (fake) Bedrock AI check ----------------------------------
+DIFFERENT = dict(same=False, item="a bottle of face wash")
+
+
+@pytest.mark.parametrize("grams, reply, status", [
+    (250, _reply(**DIFFERENT), "rejected"),                          # sure: other product
+    (250, _reply(confidence="medium", **DIFFERENT), "pending_review"),
+    (250, _reply(missing=True, item="a can"), "pending_review"),
+    (250, _reply(damage=True, item="a can"), "pending_review"),
+    (287, _reply(**DIFFERENT), "pending_review"),                   # weight ~15% off
+    (250, _reply(item="a can of cola"), "approved"),
+])
+def test_ai_declines_only_a_sure_different_product(client, app, staff_headers, grams, reply,
+                                                   status):
+    cola = _product("Coca Cola Can")
+    assert _upload(client, staff_headers, cola.product_id, REFERENCE, "ref.png").status_code == 201
+    app.image_verifier = BedrockVerifier(app.evidence_storage, MODEL,
+                                         client=FakeBedrockClient(reply))
+    tx = _transaction(client)
+    refund = _submit(client, tx, _item(tx, "111111"), grams).get_json()["refund"]
+
+    assert refund["decision_status"] == status
+    if status == "rejected":
+        assert refund["decision_reason"] == rules.different_product_message(
+            "Coca Cola Can", "a bottle of face wash")
+        # Staff still see the AI's own words.
+        assert "Kiosk photo shows: a bottle of face wash." in _signals_of(refund)["ai"].reason
