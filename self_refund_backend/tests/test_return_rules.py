@@ -24,6 +24,11 @@ def test_receipt_response_has_no_customer_details(client):
     assert tx["within_return_window"] is True and tx["return_deadline"]
 
 
+def test_receipt_items_include_category(client):
+    tx = _transaction(client)
+    assert _item(tx, "111111")["category"] == "Beverage"
+
+
 def test_client_supplied_weight_is_ignored(client):
     tx = _transaction(client)
     # scale says 200 g; the request claims a perfect 250 g

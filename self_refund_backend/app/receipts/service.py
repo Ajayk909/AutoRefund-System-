@@ -23,6 +23,7 @@ def lookup_receipt(kiosk, receipt_number, policy):
             "product_id": str(product.product_id),
             "barcode": catalog.primary_barcode(product),
             "name": product.name,
+            "category": product.category,
             "quantity": item.quantity,
             "price_at_purchase": float(item.price_at_purchase),
             "expected_weight_grams": float(product.expected_weight_grams),
