@@ -25,6 +25,6 @@ export default function EvidenceImage({ url, className, alt = "Captured item" })
   }, [url]);
 
   if (!url || failed) return null;
-  if (!src) return <div className={className} style={{ display: "flex", alignItems: "center", justifyContent: "center", color: "#6882a8" }}>Loading image…</div>;
+  if (!src) return <div className={`${className} evidence-loading`}>Loading image…</div>;
   return <img src={src} alt={alt} className={className} />;
 }
