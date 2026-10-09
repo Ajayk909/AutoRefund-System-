@@ -1,0 +1,80 @@
+/* AutoRefund UI v2 - colour tokens and shared styles.
+   The colours are the "AutoRefund colours" variables from the Figma file.
+   Kiosk screens add kiosk.css, staff screens add staff.css. */
+
+:root {
+  --primary: #1D4E9E;
+  --primary-hover: #163E7E;
+  --primary-tint: #E8EEF8;
+  --background: #F2F4F7;
+  --surface: #FFFFFF;
+  --border: #D5DBE3;
+  --text: #1A1A1A;
+  --text-secondary: #56606E;
+  --text-on-primary: #FFFFFF;
+  --success: #1E7B34;
+  --success-tint: #E7F4EA;
+  --review: #8A5300;
+  --review-tint: #FFF3DC;
+  --decline: #B42318;
+  --decline-tint: #FDECEA;
+
+  /* Grey of the box icon in the product photo placeholders */
+  --icon-muted: #8A94A3;
+  /* Dark panel behind the live camera picture */
+  --camera-bg: #1F242B;
+
+  /* Built into Windows, so the kiosk needs no font download */
+  --font: "Segoe UI", Arial, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--background);
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: none; }
+button:disabled { cursor: default; }
+
+/* Full-window area that centres the fixed-size screen ("stage").
+   useStageScale() gives the scale; the stage keeps its design size. */
+.stage-wrap {
+  position: fixed; inset: 0; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--background);
+}
+.stage { flex-shrink: 0; }
+
+/* Keyboard focus is always visible */
+:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+
+/* Icons draw with a fixed line width at any size (see Icons.jsx) */
+.icon { flex-shrink: 0; }
+.icon * { vector-effect: non-scaling-stroke; }
+
+/* Status pill: a tinted chip with the word only */
+.pill {
+  display: inline-flex; align-items: center;
+  border-radius: 999px; white-space: nowrap; font-weight: 600;
+}
+.pill-success { background: var(--success-tint); color: var(--success); }
+.pill-review { background: var(--review-tint); color: var(--review); }
+.pill-decline { background: var(--decline-tint); color: var(--decline); }
+.pill-primary { background: var(--primary-tint); color: var(--primary); }
+.pill-neutral { background: var(--background); color: var(--text-secondary); }
+
+/* Dialog: dims the screen and shows a white box in the middle */
+.dialog-backdrop {
+  position: fixed; inset: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(26, 26, 26, 0.45);
+}
+.dialog { background: var(--surface); border-radius: 12px; }
+.dialog-actions { display: flex; justify-content: flex-end; }
