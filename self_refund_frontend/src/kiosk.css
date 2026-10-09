@@ -1,0 +1,282 @@
+/* Customer kiosk screens (1920x1080). Sizes come from the Figma frames.
+   Every class starts with k- so it never clashes with the staff screens. */
+
+/* ---------- Frame: top bar / main area / toolbar ---------- */
+/* The kiosk is drawn at 1920x1080 and scaled to the window (useStageScale) */
+.k-screen {
+  width: 1920px; height: 1080px;
+  display: grid;
+  grid-template-rows: 96px 1fr 112px;
+  background: var(--background);
+  font-size: 28px;
+  line-height: 1.25;
+}
+
+.k-top {
+  display: flex; align-items: center;
+  padding: 0 48px;
+  background: var(--primary); color: var(--text-on-primary);
+}
+.k-logo {
+  width: 40px; height: 40px; margin-right: 14px;
+  display: grid; place-items: center;
+  border-radius: 8px; background: var(--surface); color: var(--primary);
+}
+/* Segoe UI sits a little low in its line box: lift the top bar text */
+.k-brand, .k-title, .k-kiosk-name { margin-top: -6px; }
+.k-brand { font-size: 28px; font-weight: 700; }
+.k-divider { width: 2px; height: 40px; margin: 0 23px 0 24px; background: rgba(255, 255, 255, 0.35); }
+.k-title { font-size: 28px; }
+.k-kiosk-name { margin-left: auto; font-size: 23px; opacity: 0.85; }
+
+.k-body {
+  display: grid; grid-template-columns: 1fr 600px; gap: 32px;
+  padding: 40px; min-height: 0;
+}
+.k-panel {
+  display: flex; flex-direction: column; min-height: 0;
+  padding: 56px 64px 36px; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+}
+.k-panel-roomy { padding: 56px 72px 36px; }
+.k-side { display: flex; flex-direction: column; gap: 24px; min-height: 0; }
+
+.k-toolbar {
+  display: flex; align-items: center;
+  padding: 0 40px;
+  background: var(--surface); border-top: 2px solid var(--border);
+}
+.k-toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+.k-tool {
+  height: 76px; padding: 0 32px;
+  display: inline-flex; align-items: center; gap: 12px;
+  border: 2px solid var(--border); border-radius: 8px; background: var(--surface);
+  font-size: 25px; font-weight: 600; color: var(--text);
+}
+.k-tool-help { padding: 0 29px; color: var(--primary); }
+.k-tool-cancel { padding: 0 31px; color: var(--decline); }
+.k-scale {
+  height: 76px; padding: 0 27px;
+  display: inline-flex; align-items: center; gap: 12px;
+  border-radius: 8px; background: var(--background);
+  font-size: 23px; color: var(--text-secondary);
+}
+.k-scale strong { font-size: 28px; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ---------- Text ---------- */
+.k-h1 { font-size: 69px; font-weight: 700; line-height: 1.1; letter-spacing: -0.5px; }
+.k-lead { margin-top: 20px; font-size: 28px; color: var(--text-secondary); }
+.k-panel-roomy .k-lead { margin-top: 24px; }
+.k-lead-close { margin-top: 10px; }
+.k-label { display: block; font-size: 26px; font-weight: 600; }
+
+/* ---------- Buttons ---------- */
+.k-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 12px;
+  border-radius: 8px; font-weight: 600; font-size: 30px;
+}
+.k-btn-primary { background: var(--primary); color: var(--text-on-primary); }
+.k-btn-primary:hover { background: var(--primary-hover); }
+.k-btn-primary:disabled { background: var(--border); color: var(--text-secondary); }
+.k-btn-secondary { background: var(--surface); color: var(--text); border: 2px solid var(--border); }
+.k-btn-danger { background: var(--decline); color: var(--text-on-primary); }
+.k-btn-outline { background: var(--surface); color: var(--primary); border: 2px solid var(--primary); }
+.k-btn-outline:hover { background: var(--primary-tint); }
+.k-btn:active:not(:disabled), .k-tool:active { transform: translateY(1px); }
+.k-btn-big { flex-shrink: 0; width: 520px; height: 112px; font-size: 30.5px; }
+.k-btn-small {
+  height: 66px; padding: 0 24px;
+  border: 2px solid var(--border); background: var(--surface);
+  font-size: 23px; color: var(--text-secondary);
+}
+.k-push-down { margin-top: 64px; }
+
+/* ---------- Right column cards ---------- */
+.k-card { padding: 40px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.k-card-roomy { padding: 56px; }
+.k-card-grow { flex: 1; }
+.k-card-title { font-size: 33px; font-weight: 700; }
+.k-card-title-small { font-size: 28px; }
+.k-note { padding: 40px; border-radius: 12px; background: var(--primary-tint); }
+.k-note p { font-size: 24px; line-height: 33px; }
+.k-note-roomy { padding: 56px; }
+.k-note-title { font-size: 30px; font-weight: 700; color: var(--primary); }
+.k-note-roomy p { margin-top: 28px; font-size: 26.5px; line-height: 35px; }
+.k-note-icon { display: flex; gap: 17px; color: var(--primary); }
+.k-note-icon p { margin-top: 8px; font-size: 25px; line-height: 33px; color: var(--text); }
+
+/* Label / value rows (receipt facts, return summary) */
+.k-facts > div { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.k-facts dt { color: var(--text-secondary); }
+.k-facts dd { font-weight: 600; }
+.k-facts .pill { padding: 4px 20px; font-size: 22.5px; }
+
+/* Grey photo placeholder + item name block */
+.k-thumb {
+  display: grid; place-items: center; flex-shrink: 0;
+  border-radius: 8px; background: var(--background); color: var(--icon-muted);
+}
+.k-item-summary { display: flex; align-items: center; gap: 21px; }
+.k-item-summary-name { font-size: 29px; font-weight: 600; line-height: 30px; }
+.k-item-summary-receipt { margin-top: 6px; font-size: 23px; color: var(--text-secondary); }
+
+/* ---------- 01 Start ---------- */
+.k-steps { list-style: none; margin-top: 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.k-step { display: flex; flex-direction: column; padding: 28px; border-radius: 12px; background: var(--background); }
+.k-step-icon {
+  width: 72px; height: 72px; margin-bottom: 19px;
+  display: grid; place-items: center;
+  border-radius: 8px; background: var(--primary-tint); color: var(--primary);
+}
+.k-step-label { font-size: 19px; font-weight: 600; color: var(--primary); }
+.k-step-title { margin-top: 7px; font-size: 28px; font-weight: 600; line-height: 38px; }
+.k-step-text { margin-top: 9px; font-size: 22px; line-height: 30px; color: var(--text-secondary); }
+.k-start-btn { margin-top: 98px; }
+
+.k-checklist { list-style: none; margin-top: 30px; display: grid; gap: 28px; }
+.k-checklist li { font-size: 26px; display: flex; align-items: center; gap: 16px; }
+.k-check {
+  width: 40px; height: 40px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--success-tint); color: var(--success);
+}
+.k-staff-btn {
+  margin-top: auto; align-self: flex-end;
+  height: 61px; padding: 0 24px;
+  display: inline-flex; align-items: center; gap: 10px;
+  border: 2px solid var(--border); border-radius: 8px; background: var(--surface);
+  font-size: 21px; font-weight: 600; color: var(--text);
+}
+
+/* ---------- 02 Receipt ---------- */
+.k-scan {
+  margin-top: 41px; height: 200px; padding: 0 40px;
+  display: flex; align-items: center; gap: 32px;
+  border-radius: 12px; background: var(--background);
+}
+.k-scan-icon {
+  width: 128px; height: 128px; display: grid; place-items: center;
+  border-radius: 12px; background: var(--primary-tint); color: var(--primary);
+}
+.k-scan-text { flex: 1; }
+.k-scan-title { font-size: 33px; font-weight: 700; line-height: 37px; }
+.k-scan-sub { margin-top: 4px; font-size: 25px; color: var(--text-secondary); }
+.k-label { margin-top: 44px; }
+.k-input-row { margin-top: 17px; display: flex; gap: 20px; }
+.k-input {
+  flex: 1; height: 96px; padding: 0 28px 6px;
+  border: 2px solid var(--border); border-radius: 8px; background: var(--surface);
+  font-size: 32px;
+}
+.k-input::placeholder { color: #9AA0A8; }
+/* A blue border shows touch-keyboard users where they are typing */
+.k-input:focus-visible { outline: none; }
+.k-input:focus { border-color: var(--primary); }
+.k-input-error, .k-input-error:focus { border-color: var(--decline); }
+.k-find-btn { width: 400px; height: 96px; font-size: 32px; }
+
+.k-error {
+  margin-top: 20px; padding: 25px 30px 25px 26px;
+  display: flex; align-items: center; gap: 19px;
+  border-radius: 8px; background: var(--decline-tint);
+  font-size: 25px; color: var(--text);
+}
+.k-error > .icon { color: var(--decline); }
+.k-error-title { font-size: 28px; font-weight: 700; line-height: 28px; color: var(--decline); }
+.k-error-title + div { margin-top: 6px; }
+.k-error-compact { margin-top: 24px; padding: 20px 28px 20px 24px; }
+
+.k-find { display: flex; flex-direction: column; padding-bottom: 60px; }
+.k-receipt-pic {
+  width: 300px; height: 324px; margin: 30px auto 0; padding: 28px;
+  border: 2px solid var(--border); border-radius: 4px;
+}
+.k-receipt-line { display: block; height: 10px; margin-bottom: 12px; border-radius: 5px; background: var(--border); }
+.k-receipt-barcode {
+  width: 181px; height: 82px; margin-top: 34px; padding: 0 10px;
+  display: flex; align-items: center; gap: 4px;
+  border: 3px solid var(--primary); border-radius: 4px;
+}
+.k-receipt-barcode span { height: 58px; background: var(--text); }
+.k-receipt-number { margin-top: 12px; font-size: 15px; color: var(--text-secondary); }
+.k-find-caption { margin-top: 27px; text-align: center; font-size: 24px; }
+
+/* ---------- 03 Choose item ---------- */
+.k-items { list-style: none; margin-top: 30px; display: grid; gap: 16px; overflow: auto; }
+.k-item {
+  display: flex; align-items: center; gap: 28px;
+  padding: 20px 24px;
+  border: 2px solid var(--border); border-radius: 8px;
+}
+.k-item-text { flex: 1; min-width: 0; }
+.k-item-name { font-size: 31px; font-weight: 600; }
+.k-item-details { margin-top: 4px; font-size: 22.5px; color: var(--text-secondary); }
+.k-item-price { font-size: 31px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.k-item-btn { width: 260px; height: 84px; font-size: 31px; }
+.k-item-off { background: var(--background); }
+.k-item-off .k-item-name, .k-item-off .k-item-price { color: var(--text-secondary); }
+.k-item-tag {
+  width: 260px; padding: 10px 16px;
+  border-radius: 8px; background: var(--border);
+  font-size: 22px; font-weight: 600; text-align: center; color: var(--text-secondary);
+}
+.k-item-tag-review { background: var(--review-tint); color: var(--review); }
+
+.k-receipt-head { margin-top: 3px; display: flex; align-items: center; gap: 20px; padding-bottom: 32px; border-bottom: 1px solid var(--border); }
+.k-receipt-icon {
+  width: 64px; height: 64px; display: grid; place-items: center;
+  border-radius: 8px; background: var(--primary-tint); color: var(--primary);
+}
+.k-receipt-head-label { font-size: 23px; color: var(--text-secondary); }
+.k-receipt-head-number { font-size: 33px; font-weight: 700; }
+.k-facts { margin-top: 26px; display: grid; gap: 28px; }
+
+/* ---------- 04 Weigh ---------- */
+.k-banner {
+  margin-bottom: 24px; padding: 18px 24px;
+  display: flex; align-items: center; gap: 16px;
+  border-radius: 8px; background: var(--review-tint);
+  font-size: 27px; font-weight: 600; color: var(--review);
+}
+.k-weight { margin-top: 45px; padding: 35px 48px 52px; border-radius: 12px; background: var(--background); }
+.k-weight-label { font-size: 25px; color: var(--text-secondary); }
+.k-weight-value { font-size: 128px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.k-weight-problem { font-size: 25px; color: var(--text-secondary); }
+.k-weight-problem strong { display: block; font-size: 29px; color: var(--decline); }
+.k-weigh-action { margin-top: auto; padding-bottom: 20px; }
+.k-photo-note { margin-bottom: 20px; font-size: 25px; color: var(--text-secondary); }
+
+.k-camera {
+  position: relative; height: 338px; overflow: hidden;
+  border-radius: 12px; background: var(--camera-bg); color: var(--text-on-primary);
+}
+.k-camera-empty {
+  height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.k-camera-title { margin-top: 9px; font-size: 25px; font-weight: 600; }
+.k-camera-sub { margin-top: 12px; font-size: 21px; color: rgba(255, 255, 255, 0.75); }
+.k-camera-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.k-card .k-item-summary { margin-top: 23px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+.k-facts-tight { margin-top: 20px; gap: 22px; font-size: 26.5px; }
+
+/* ---------- 05-07 Result ---------- */
+.k-result-icon { margin-top: 15px; width: 128px; height: 128px; display: grid; place-items: center; border-radius: 50%; }
+.k-result-icon-success { background: var(--success-tint); color: var(--success); }
+.k-result-icon-review { background: var(--review-tint); color: var(--review); }
+.k-result-icon-decline { background: var(--decline-tint); color: var(--decline); }
+.k-result-headline { margin-top: 37px; font-size: 60px; }
+.k-result-headline + .k-lead { margin-top: 31px; font-size: 30px; }
+.k-facts-result { margin-top: 24px; margin-bottom: 3px; gap: 25px; }
+.k-result-note {
+  margin-top: 34px; padding: 23px 32px 28px;
+  border-radius: 8px; background: var(--background);
+  font-size: 26px; font-weight: 600;
+}
+.k-result-btn { margin-top: auto; margin-bottom: 36px; width: 480px; }
+
+/* ---------- Dialogs on the kiosk ---------- */
+.k-screen .dialog { width: 960px; padding: 56px; }
+.k-screen .dialog-title { font-size: 44px; font-weight: 700; }
+.k-screen .dialog-text { margin-top: 20px; font-size: 29px; color: var(--text-secondary); }
+.k-screen .dialog-actions { margin-top: 44px; gap: 16px; }
+.k-screen .dialog-actions .k-btn { height: 96px; padding: 0 40px; min-width: 200px; }

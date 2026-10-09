@@ -1,30 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import Layout from "../../components/Layout";
-import PageWrapper from "../../components/PageWrapper";
+import KioskLayout from "../../components/KioskLayout";
+import { ItemThumb } from "../../components/ItemSummary";
+import { InfoIcon, ReceiptIcon } from "../../components/Icons";
 import agent from "../../services/agent";
-
-function KioskShell() {
-  const [time, setTime] = useState(new Date());
-  useEffect(() => {
-    const t = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
-  return (
-    <>
-      <div className="kiosk-particles" aria-hidden>
-        {Array.from({ length: 18 }).map((_, i) => (
-          <span key={i} style={{ left: `${5 + Math.random() * 90}%`, bottom: `${Math.random() * 10}%`, width: `${2 + Math.random() * 3}px`, height: `${2 + Math.random() * 3}px`, "--dur": `${8 + Math.random() * 14}s`, "--delay": `${Math.random() * 12}s` }} />
-        ))}
-      </div>
-      <div className="kiosk-topbar">
-        <div className="topbar-brand"><span className="topbar-dot" />AutoRefund</div>
-        <div className="topbar-time">{time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
-        <div className="topbar-status">● SYSTEM ONLINE</div>
-      </div>
-    </>
-  );
-}
+import { money, parseServerDate } from "../../services/format";
 
 const INELIGIBLE_TEXT = {
   ALREADY_RETURNED: "Already returned",
@@ -33,9 +13,37 @@ const INELIGIBLE_TEXT = {
   TOO_MANY_ATTEMPTS: "Please visit customer service for help with this item",
 };
 
+// "Beverage · 1 bought", or "Beverage · 2 of 3 can be returned"
+function itemDetails(item) {
+  const amount = item.quantity > 1 && item.returnable_quantity !== undefined
+    ? `${item.returnable_quantity} of ${item.quantity} can be returned`
+    : `${item.quantity} bought`;
+  return item.category ? `${item.category} · ${amount}` : amount;
+}
+
+function ItemRow({ item, onReturn }) {
+  const canReturn = item.is_refundable;
+  return (
+    <li className={`k-item ${canReturn ? "" : "k-item-off"}`}>
+      <ItemThumb size={112} />
+      <div className="k-item-text">
+        <div className="k-item-name">{item.name}</div>
+        <div className="k-item-details">{itemDetails(item)}</div>
+      </div>
+      <div className="k-item-price">{money(item.price_at_purchase)}</div>
+      {canReturn ? (
+        <button className="k-btn k-btn-outline k-item-btn" onClick={() => onReturn(item)}>Return this</button>
+      ) : (
+        <span className={`k-item-tag ${item.ineligible_reason === "PENDING_REVIEW" ? "k-item-tag-review" : ""}`}>
+          {INELIGIBLE_TEXT[item.ineligible_reason] || "This item can't be returned here"}
+        </span>
+      )}
+    </li>
+  );
+}
+
 function ItemSelectionPage() {
   const [transaction, setTransaction] = useState(null);
-  const [selectedItem, setSelectedItem] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -53,165 +61,65 @@ function ItemSelectionPage() {
       .catch(() => { /* keep the cached receipt; the server re-checks on submit */ });
   }, []);
 
-  const handleSelectItem = (item) => {
+  // One tap selects the item and moves on to weighing it.
+  const handleReturn = (item) => {
     if (!item.is_refundable) return;
-    setSelectedItem(item);
-  };
-
-  const handleNext = () => {
-    if (!selectedItem) return;
-    localStorage.setItem("selectedItem", JSON.stringify(selectedItem));
+    localStorage.setItem("selectedItem", JSON.stringify(item));
     navigate("/customer/verify");
   };
 
+  const goBack = () => navigate("/customer/receipt");
+
   if (!transaction) {
     return (
-      <PageWrapper>
-        <KioskShell />
-        <Layout title="Item Selection" subtitle="No receipt data found.">
-          <div className="isp-no-data">
-            <div className="isp-no-data-icon">📋</div>
-            <h2>No receipt data found</h2>
-            <p>Please scan or enter your receipt first.</p>
-            <button className="primary-btn" onClick={() => navigate("/customer/receipt")}>← Scan Receipt</button>
-            <button className="ghost-btn" onClick={() => navigate("/")}>← Back to Home</button>
-          </div>
-        </Layout>
-      </PageWrapper>
+      <KioskLayout title="Choose an item" onBack={goBack} showCancel>
+        <h1 className="k-h1">No receipt found</h1>
+        <p className="k-lead">Please scan or enter your receipt first.</p>
+        <button className="k-btn k-btn-primary k-btn-big k-push-down" onClick={goBack}>Scan your receipt</button>
+      </KioskLayout>
     );
   }
 
-  return (
-    <PageWrapper>
-      <KioskShell />
-      <Layout title="" subtitle="">
-        <div className="kiosk-content">
-          {/* Progress */}
-          <div className="isp-progress">
-            {["Receipt", "Select Item", "Weigh", "Done!"].map((label, i) => (
-              <div key={label} className="isp-progress-part">
-                <div className={`isp-step ${i === 0 ? "isp-done" : i === 1 ? "isp-active" : ""}`}>
-                  <div className="isp-step-circle">{i === 0 ? "✓" : i + 1}</div>
-                  <div className="isp-step-label">{label}</div>
-                </div>
-                {i < 3 && <div className={`isp-progress-line ${i === 0 ? "isp-line-done" : ""}`} />}
-              </div>
-            ))}
-          </div>
+  const returnableCount = transaction.items.filter((item) => item.is_refundable).length;
 
-          {/* Header */}
-          <div className="kiosk-hero" style={{ paddingTop: 32, paddingBottom: 24 }}>
-            <div className="kiosk-eyebrow">Step 2 of 3</div>
-            <h1 className="page-title">Select Item to Return</h1>
-            <p className="page-subtitle">Choose the item from your receipt that you'd like to refund</p>
-          </div>
-
-          {/* Guide strip */}
-          <div className="kiosk-guide-strip">
-            <div className="kgs-item kgs-done"><div className="kgs-icon">📋</div><div className="kgs-label">Receipt scanned</div></div>
-            <div className="kgs-item kgs-active"><div className="kgs-icon">📦</div><div className="kgs-label">Select item</div></div>
-            <div className="kgs-item"><div className="kgs-icon">⚖️</div><div className="kgs-label">Weigh item</div></div>
-            <div className="kgs-item"><div className="kgs-icon">✅</div><div className="kgs-label">Get result</div></div>
-          </div>
-
-          {/* Receipt meta */}
-          <div className="isp-receipt-bar">
-            <div className="isp-rb-item">
-              <span className="isp-rb-label">Receipt</span>
-              <span className="isp-rb-val isp-mono">{transaction.receipt_number}</span>
-            </div>
-            <div className="isp-rb-divider" />
-            <div className="isp-rb-item">
-              <span className="isp-rb-label">Return by</span>
-              <span className="isp-rb-val">{transaction.return_deadline ? new Date(transaction.return_deadline).toLocaleDateString() : "N/A"}</span>
-            </div>
-            <div className="isp-rb-divider" />
-            <div className="isp-rb-item">
-              <span className="isp-rb-label">Total Paid</span>
-              <span className="isp-rb-val isp-green">${transaction.total_amount}</span>
-            </div>
-            <div className="isp-rb-divider" />
-            <div className="isp-rb-item">
-              <span className="isp-rb-label">Items</span>
-              <span className="isp-rb-val">{transaction.items.length}</span>
-            </div>
-          </div>
-
-          <div className="section-label" style={{ marginTop: 20 }}>Select one item to refund</div>
-
-          <div className="items-list">
-            {transaction.items.map((item) => {
-              const isSelected = selectedItem?.item_id === item.item_id;
-              const isDisabled = !item.is_refundable;
-              return (
-                <label key={item.item_id} className={`item-card ${isSelected ? "selected" : ""} ${isDisabled ? "item-card-disabled" : ""}`}>
-                  <input type="radio" name="refundItem" checked={isSelected} disabled={isDisabled} onChange={() => handleSelectItem(item)} />
-                  <div className="item-info-block">
-                    <h3>{item.name}</h3>
-                    <div className="item-tags">
-                      <span className="itag">Barcode: {item.barcode}</span>
-                      <span className="itag">Qty: {item.quantity}</span>
-                      {item.quantity > 1 && item.returnable_quantity !== undefined && (
-                        <span className="itag">{item.returnable_quantity} of {item.quantity} can be returned</span>
-                      )}
-                      <span className="itag">Expected: {item.expected_weight_grams} g</span>
-                    </div>
-                    {isDisabled && (
-                      <div className="refund-locked-note">
-                        {INELIGIBLE_TEXT[item.ineligible_reason] || "This item can't be returned here"}
-                      </div>
-                    )}
-                  </div>
-                  {isSelected && !isDisabled && <div className="item-check" aria-hidden>✓</div>}
-                </label>
-              );
-            })}
-          </div>
-
-          <div className="btn-row">
-            <button className="ghost-btn" onClick={() => navigate("/customer/receipt")}>← Back to Receipt</button>
-            <button className="ghost-btn" onClick={() => navigate("/")}>🏠 Home</button>
-            <button className="primary-btn" onClick={handleNext} disabled={!selectedItem} style={{ marginLeft: "auto" }}>
-              {selectedItem ? `Weigh "${selectedItem.name}" →` : "Select an item to continue"}
-            </button>
+  const side = (
+    <>
+      <div className="k-card k-card-roomy">
+        <div className="k-receipt-head">
+          <span className="k-receipt-icon"><ReceiptIcon size={34} /></span>
+          <div>
+            <div className="k-receipt-head-label">Your receipt</div>
+            <div className="k-receipt-head-number">{transaction.receipt_number}</div>
           </div>
         </div>
-      </Layout>
+        <dl className="k-facts">
+          <div><dt>Items on receipt</dt><dd>{transaction.items.length}</dd></div>
+          <div><dt>Can be returned here</dt><dd>{returnableCount}</dd></div>
+          <div>
+            <dt>Return by</dt>
+            <dd>{transaction.return_deadline ? parseServerDate(transaction.return_deadline).toLocaleDateString() : "N/A"}</dd>
+          </div>
+          <div><dt>Total paid</dt><dd>{money(transaction.total_amount)}</dd></div>
+        </dl>
+      </div>
+      <div className="k-note k-note-icon">
+        <InfoIcon size={38} />
+        <div>
+          <h2 className="k-note-title">Item not listed?</h2>
+          <p>It may already be returned, or it can't be returned at the kiosk. Tap I need help.</p>
+        </div>
+      </div>
+    </>
+  );
 
-      <style>{`
-        @keyframes fsUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-        .isp-no-data{display:flex;flex-direction:column;align-items:center;gap:16px;padding:60px 24px;text-align:center}
-        .isp-no-data-icon{font-size:56px}
-        .isp-no-data h2{font-size:28px;color:#fff;font-family:'Orbitron',sans-serif}
-        .isp-no-data p{color:#6882a8;font-size:16px}
-        .isp-progress{display:flex;align-items:center;padding:20px 32px;background:rgba(4,10,22,.75);border-radius:18px;border:1px solid rgba(56,189,248,.1);animation:fsUp .4s ease both;gap:0;margin-bottom:8px}
-        .isp-progress-part{display:flex;align-items:center;flex:1}
-        .isp-step{display:flex;flex-direction:column;align-items:center;gap:7px}
-        .isp-step-circle{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;background:rgba(56,189,248,.08);color:#3d5270;border:1px solid rgba(56,189,248,.14)}
-        .isp-done .isp-step-circle{background:rgba(16,251,196,.14);color:#10fbc4;border-color:rgba(16,251,196,.3)}
-        .isp-active .isp-step-circle{background:linear-gradient(135deg,#0ea5e9,#38bdf8);color:#020810;box-shadow:0 0 20px rgba(56,189,248,.5);border:none}
-        .isp-step-label{font-size:11px;color:#3d5270;font-family:'Space Mono',monospace;letter-spacing:.07em;white-space:nowrap}
-        .isp-done .isp-step-label{color:#10fbc4}
-        .isp-active .isp-step-label{color:#38bdf8}
-        .isp-progress-line{flex:1;height:2px;background:rgba(56,189,248,.07);margin:0 6px}
-        .isp-line-done{background:linear-gradient(90deg,rgba(16,251,196,.35),rgba(16,251,196,.1))}
-        .isp-receipt-bar{display:flex;align-items:center;gap:0;border-radius:16px;background:rgba(4,10,22,.7);border:1px solid rgba(56,189,248,.12);overflow:hidden;margin-bottom:8px;animation:fsUp .45s ease both .28s}
-        .isp-rb-item{flex:1;display:flex;flex-direction:column;gap:4px;padding:18px 22px}
-        .isp-rb-divider{width:1px;background:rgba(56,189,248,.12);align-self:stretch}
-        .isp-rb-label{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#6882a8}
-        .isp-rb-val{font-size:15px;font-weight:600;color:#fff}
-        .isp-rb-val.isp-mono{font-family:'Space Mono',monospace;font-size:13px;color:#38bdf8}
-        .isp-rb-val.isp-green{color:#22d3a4}
-        .item-info-block{flex:1}
-        .item-tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-        .itag{font-size:12px;font-family:'Space Mono',monospace;color:#6882a8;background:rgba(99,160,255,.07);border:1px solid rgba(99,160,255,.14);border-radius:6px;padding:3px 9px}
-        .item-check{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#0ea5e9,#38bdf8);color:#020810;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0;align-self:center;box-shadow:0 0 16px rgba(56,189,248,.7)}
-        .item-card-disabled{opacity:.62;cursor:not-allowed;border:1px solid rgba(251,191,36,.25)!important;background:rgba(251,191,36,.05)!important}
-        .item-card-disabled input{cursor:not-allowed}
-        .refund-locked-note{margin-top:12px;display:inline-flex;width:fit-content;padding:6px 10px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.03em;color:#fbbf24;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.22)}
-        @media(max-width:600px){.isp-receipt-bar{flex-wrap:wrap}.isp-rb-item{min-width:calc(50% - 1px)}.isp-rb-divider{display:none}}
-      `}</style>
-    </PageWrapper>
+  return (
+    <KioskLayout title="Choose an item" side={side} onBack={goBack} showCancel>
+      <h1 className="k-h1">Which item are you returning?</h1>
+      <p className="k-lead k-lead-close">Tap Return this next to the item.</p>
+      <ul className="k-items">
+        {transaction.items.map((item) => <ItemRow key={item.item_id} item={item} onReturn={handleReturn} />)}
+      </ul>
+    </KioskLayout>
   );
 }
 
